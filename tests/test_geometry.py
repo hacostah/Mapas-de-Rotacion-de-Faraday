@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from faradaymr.simulation.geometry import cylindrical_radius, filament_axis_from_viewing_angle
+from faradaymr.simulation.geometry import cylindrical_radius, filament_axis_from_viewing_angle, projected_axis_distance
 
 def test_cylindrical_radius_eje_z():
     """Prueba que el radio cilíndrico respecto al eje Z ignora la coordenada Z."""
@@ -65,3 +65,26 @@ def test_filament_axis_permanece_en_el_plano_xz():
     for theta in thetas:
         eje = filament_axis_from_viewing_angle(theta)
         assert eje[1] == 0.0
+
+def test_projected_axis_distance_filamento_en_x():
+    # Filamento a lo largo de x: la distancia perpendicular debe depender
+    # solo de la coordenada y (eje 1), constante a lo largo de x (eje 0).
+    d = projected_axis_distance((5, 5), [1.0, 0.0, 0.0], pixel_size=1.0, xp=np)
+    esperado_por_columna = np.abs(np.arange(5) - 2)
+    for i in range(5):
+        np.testing.assert_allclose(d[i, :], esperado_por_columna)
+
+
+def test_projected_axis_distance_ignora_la_componente_z():
+    # Dos ejes con la misma proyección en (x,y) pero distinta inclinación
+    # respecto a z deben dar exactamente el mismo mapa de distancias: la
+    # componente z se descarta a propósito.
+    d1 = projected_axis_distance((6, 6), [1.0, 0.0, 0.0], pixel_size=1.0, xp=np)
+    d2 = projected_axis_distance((6, 6), [2.0, 0.0, 5.0], pixel_size=1.0, xp=np)
+    np.testing.assert_allclose(d1, d2)
+
+
+def test_projected_axis_distance_caso_degenerado_no_lanza_error():
+    # Filamento paralelo a la línea de visión: proyección nula en (x,y).
+    d = projected_axis_distance((5, 5), [0.0, 0.0, 1.0], pixel_size=1.0, xp=np)
+    assert np.all(np.isfinite(d))

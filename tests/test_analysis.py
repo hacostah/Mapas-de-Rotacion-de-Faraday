@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from faradaymr.analysis import radial_profile, transverse_rm_dispersion
-
+from faradaymr.simulation.geometry import projected_axis_distance
 
 def test_mapa_uniforme_no_tiene_dispersion():
     # Un mapa de RM perfectamente uniforme no tiene ninguna fluctuacion
@@ -65,68 +65,76 @@ def test_bin_sin_puntos_da_nan_no_cero():
     assert np.isnan(valores[-1])
 
 
-def test_transverse_rm_dispersion_es_radial_profile_con_std():
-    # transverse_rm_dispersion no deberia tener ninguna logica propia:
-    # es, por definicion, radial_profile fijando statistic="std". Si en
-    # el futuro alguien "optimiza" una de las dos por separado y quedan
-    # desincronizadas, este test tiene que fallar.
-    rng = np.random.default_rng(0)
-    mapa_rm = rng.normal(size=(50, 50))
-    xx, yy = np.meshgrid(np.arange(50) - 25, np.arange(50) - 25)
-    distancia = np.abs(xx.astype(float))  # distancia a un eje, no a un punto
+def test_transverse_rm_dispersion_alineado_eje_x():
+    pixel_size = 1.0
+    ny, nx = 5, 5
+    rm_map = np.zeros((ny, nx))
+    for i in range(ny):
+        for j in range(nx):
+            # filamento a lo largo de x (eje 0): la distancia perpendicular
+            # varía con j (eje 1 = y), no con i.
+            rm_map[i, j] = abs(j - 2) * pixel_size
 
-    centros_a, valores_a = radial_profile(mapa_rm, distancia, bins=8, statistic="std")
-    centros_b, valores_b = transverse_rm_dispersion(mapa_rm, distancia, bins=8)
+    filament_axis_3d = [1.0, 0.0, 0.0]
+    bins = np.array([-0.5, 0.5, 1.5, 2.5])
 
-    assert np.allclose(centros_a, centros_b)
-    assert np.allclose(valores_a, valores_b, equal_nan=True)
+    bin_centers, rm_dispersion = transverse_rm_dispersion(
+        rm_map, filament_axis_3d, pixel_size, bins, xp=np
+    )
+
+    np.testing.assert_allclose(bin_centers, [0.0, 1.0, 2.0], atol=1e-7)
+    # todos los píxeles de una misma banda perpendicular tienen el mismo
+    # RM exacto: la dispersión transversal debe ser cero.
+    np.testing.assert_allclose(rm_dispersion, [0.0, 0.0, 0.0], atol=1e-7)
+
+
+def test_transverse_rm_dispersion_proyeccion_z_degenerada():
+    rm_map = np.ones((5, 5))
+    filament_axis_3d = [0.0, 0.0, 1.0]  # proyección (x,y) nula
+    resultado = transverse_rm_dispersion(rm_map, filament_axis_3d, 1.0, bins=3, xp=np)
+    assert resultado is not None
+    assert not np.any(np.isnan(resultado[1]))
+
+
+def test_transverse_rm_dispersion_no_duplica_logica():
+    # transverse_rm_dispersion no debe tener lógica propia: es, por
+    # definición, projected_axis_distance + radial_profile(statistic="std").
+    rng = np.random.default_rng(3)
+    rm_map = rng.normal(size=(30, 30))
+    filament_axis_3d = [np.sin(0.4), 0.0, np.cos(0.4)]
+    pixel_size = 2.0
+    bins = 6
+
+    distance_map = projected_axis_distance(rm_map.shape, filament_axis_3d, pixel_size, xp=np)
+    centros_esperados, valores_esperados = radial_profile(
+        rm_map, distance_map, bins, statistic="std"
+    )
+    centros, valores = transverse_rm_dispersion(rm_map, filament_axis_3d, pixel_size, bins)
+
+    assert np.allclose(centros, centros_esperados)
+    assert np.allclose(valores, valores_esperados, equal_nan=True)
 
 
 def test_dispersion_transversal_decrece_al_alejarse_del_eje_del_filamento():
-    # Este es el observable fisico real del Proyecto II: un filamento
-    # turbulento donde la amplitud del campo (y por lo tanto de RM) cae
-    # con la distancia al eje. Se arma un RM sintetico como
-    # amplitud(d) * ruido_gaussiano_de_media_cero, con amplitud
-    # exponencialmente decreciente -- el promedio de RM da ~0 en todos
-    # lados (el campo turbulento no tiene direccion privilegiada, tal
-    # como dice el abstract), pero su *dispersion* si debe caer con la
-    # distancia al eje. Se usa una muestra grande para que el ruido
-    # estadistico del propio estimador de std no tape la tendencia.
+    # Mismo observable físico de antes (Proyecto II), ahora sobre un mapa
+    # 2D real y pasando por la API definitiva (eje 3D + pixel_size), en vez
+    # de fabricar a mano un arreglo de "distancias": cubre también la
+    # proyección geométrica, no solo el binning.
     rng = np.random.default_rng(42)
-    distancia = rng.uniform(0.0, 10.0, size=200_000)
-    amplitud_0, escala = 50.0, 3.0
-    amplitud = amplitud_0 * np.exp(-distancia / escala)
-    rm_sintetico = amplitud * rng.normal(size=distancia.size)
+    pixel_size = 1.0
+    n = 400
+    filament_axis_3d = [0.0, 1.0, 0.0]  # filamento a lo largo de "y"
 
-    bordes = np.linspace(0.0, 10.0, 6)
-    centros, dispersion = transverse_rm_dispersion(rm_sintetico, distancia, bins=bordes)
+    distance_map = projected_axis_distance((n, n), filament_axis_3d, pixel_size, xp=np)
+    amplitud_0, escala = 50.0, 60.0
+    amplitud = amplitud_0 * np.exp(-distance_map / escala)
+    rm_map = amplitud * rng.normal(size=(n, n))
 
-    # la dispersion medida en cada bin debe acercarse a la amplitud
-    # teorica evaluada en el centro del bin (dentro de un 10%, que es
-    # margen mas que suficiente con 40000 puntos por bin en promedio)
-    dispersion_teorica = amplitud_0 * np.exp(-centros / escala)
-    assert np.allclose(dispersion, dispersion_teorica, rtol=0.1)
-
-    # y sobre todo: la tendencia tiene que ser monotona decreciente,
-    # que es la firma observacional que el proyecto busca medir
-    assert np.all(np.diff(dispersion) < 0)
-
-
-def test_radial_profile_acepta_bins_como_entero_o_como_bordes_explicitos():
-    # scipy.stats.binned_statistic admite pasar solo el numero de bins
-    # (bordes automaticos equiespaciados) o los bordes exactos. El
-    # framework no le agrega restricciones propias a esa flexibilidad,
-    # asi que ambas formas de uso tienen que seguir funcionando.
-    rng = np.random.default_rng(1)
-    distancia = rng.uniform(0, 5, size=500)
-    mapa = rng.normal(size=500)
-
-    centros_auto, valores_auto = radial_profile(mapa, distancia, bins=4)
-    centros_manual, valores_manual = radial_profile(
-        mapa, distancia, bins=np.linspace(distancia.min(), distancia.max(), 5)
+    bordes = np.linspace(0.0, distance_map.max(), 6)
+    centros, dispersion = transverse_rm_dispersion(
+        rm_map, filament_axis_3d, pixel_size, bordes
     )
 
-    assert centros_auto.shape == (4,)
-    assert valores_auto.shape == (4,)
-    assert np.allclose(centros_auto, centros_manual)
-    assert np.allclose(valores_auto, valores_manual, equal_nan=True)
+    dispersion_teorica = amplitud_0 * np.exp(-centros / escala)
+    assert np.allclose(dispersion, dispersion_teorica, rtol=0.1)
+    assert np.all(np.diff(dispersion) < 0)

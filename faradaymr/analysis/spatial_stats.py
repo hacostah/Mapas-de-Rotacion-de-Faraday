@@ -5,6 +5,7 @@ from __future__ import annotations
 from scipy.stats import binned_statistic
 
 from ..backend import to_numpy
+from ..simulation.geometry import projected_axis_distance
 
 def radial_profile(map2d, distance_map, bins, statistic="std", xp=None):
     """
@@ -58,12 +59,22 @@ def radial_profile(map2d, distance_map, bins, statistic="std", xp=None):
 
     return centros, valores
 
-def transverse_rm_dispersion(rm_map, distance_map, bins, xp=None):
+def transverse_rm_dispersion(rm_map, filament_axis_3d, pixel_size, bins, xp=None):
     """
-    Perfil de dispersión transversal de RM (Proyecto II): sigma_RM(d), la
-    desviación estándar de la Medida de Rotación en función de la distancia
-    transversal al eje del filamento.
+    Perfil de dispersión transversal de RM (Proyecto II): sigma_RM(d) en
+    función de la distancia al eje *proyectado* del filamento sobre el mapa.
 
-    Reutiliza `radial_profile` sin modificarla, fijando `statistic="std"`.
+    No tiene lógica propia de geometría ni de binning: `projected_axis_distance`
+    resuelve la proyección del eje 3D al plano del mapa, y `radial_profile`
+    resuelve el binning estadístico. Esta función solo los compone.
     """
+    if xp is None:
+        try:
+            import cupy as xp
+        except ImportError:
+            import numpy as xp
+
+    distance_map = projected_axis_distance(
+        rm_map.shape, filament_axis_3d, pixel_size, xp=xp
+    )
     return radial_profile(rm_map, distance_map, bins, statistic="std", xp=xp)
