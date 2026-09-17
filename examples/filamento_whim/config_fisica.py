@@ -3,7 +3,7 @@ import astropy.constants as const
 
 # --- Parámetros físicos del filamento WHIM ---
 # Densidad electrónica de ~1e-5 cm^-3, congruente con el rango 10^-6 - 10^-4 cm^-3
-# para el WHIM filamentario genérico (ej. Tanimura et al. 2020)[cite: 3].
+# para el WHIM filamentario genérico (ej. Tanimura et al. 2020).
 N0 = 1e-5 * (u.cm**-3) 
 
 # Radio del núcleo (core radius). Se usan 300 kpc para permitir que la densidad 
@@ -17,8 +17,8 @@ RC = 300.0 * u.kpc
 BETA = 0.5
 
 # Campo magnético. 40 nG (0.04 µG) representa mediciones observacionales 
-# recientes basadas en RM extragalácticas a baja frecuencia (Carretti et al. 2022)[cite: 2].
-# (Un valor de 10 nG rozaría el límite inferior teórico; Akahori & Ryu 2010)[cite: 4].
+# recientes basadas en RM extragalácticas a baja frecuencia (Carretti et al. 2022).
+# (Un valor de 10 nG rozaría el límite inferior teórico; Akahori & Ryu 2010).
 B0 = 0.04 * u.microgauss 
 
 MU = 0.6 # Peso molecular medio aproximado para plasma ionizado
