@@ -7,11 +7,6 @@ from faradaymr import BetaModel, DensityProfile, GaussianRandomVectorField, get_
 # Importamos la nueva función geométrica 
 from faradaymr.simulation.geometry import cylindrical_radius
 
-# Buscamos la ruta de config
-ruta_config = os.path.abspath(os.path.join(os.path.dirname(__file__), '../icm_faraday_rotation'))
-if ruta_config not in sys.path:
-    sys.path.insert(0, ruta_config)
-
 import config as cfg
 
 

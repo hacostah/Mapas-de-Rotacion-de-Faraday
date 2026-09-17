@@ -30,19 +30,8 @@ if _RUTA_LOCAL not in sys.path:
     # Prioridad absoluta al directorio del filamento
     sys.path.insert(0, _RUTA_LOCAL)
 
-_RUTA_ICM = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "icm_faraday_rotation")
-)
-if _RUTA_ICM not in sys.path:
-    # El directorio ICM se añade al final (fallback) solo para buscar config.py
-    sys.path.append(_RUTA_ICM)
-
 import numpy as np
 
-# El filamento reutiliza la configuración física del ejemplo del ICM
-# (tamaño de caja, resolución, turbulencia, banda de observación): lo único
-# distinto entre ambos ejemplos es la geometría del medio (esférica vs.
-# cilíndrica), no el instrumento ni la malla.
 import config as cfg
 from model import construir_escenario
 
