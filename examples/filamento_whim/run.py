@@ -23,17 +23,15 @@ filamento dentro de ella.
 from __future__ import annotations
 
 import os
-import sys
-
-_RUTA_LOCAL = os.path.abspath(os.path.dirname(__file__))
-if _RUTA_LOCAL not in sys.path:
-    # Prioridad absoluta al directorio del filamento
-    sys.path.insert(0, _RUTA_LOCAL)
-
 import numpy as np
+import importlib
 
-import config as cfg
-from model import construir_escenario
+# Imports absolutos usando la ruta completa del paquete
+from examples.filamento_whim import config as cfg
+from examples.filamento_whim.model import construir_escenario
+
+# Blindaje adicional sugerido por la revisión
+importlib.reload(cfg)
 
 from faradaymr import ObservationConfig, ObservationPipeline, get_backend, to_numpy
 from faradaymr.io import save_maps

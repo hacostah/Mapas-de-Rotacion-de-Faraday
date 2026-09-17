@@ -1,13 +1,9 @@
-import sys
-import os
 import numpy as np
 import pytest
+import importlib
 
-# Ajustamos la ruta para poder importar construir_escenario
-ruta_ejemplos = os.path.abspath(os.path.join(os.path.dirname(__file__), '../examples/filamento_whim'))
-sys.path.insert(0, ruta_ejemplos)
-
-from model import construir_escenario
+from examples.filamento_whim.model import construir_escenario
+from examples.filamento_whim import config as cfg
 
 def test_simetria_cilindrica_escenario():
     """
