@@ -1,32 +1,17 @@
 import os
 import sys
-
+import importlib
 import numpy as np
 
-EXAMPLE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "examples", "filamento_whim"
-)
-ICM_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "examples", "icm_faraday_rotation"
-)
-
-
-def _cargar_ejemplo():
-    if ICM_DIR not in sys.path:
-        sys.path.insert(0, ICM_DIR)
-    if EXAMPLE_DIR not in sys.path:
-        sys.path.insert(0, EXAMPLE_DIR)
-    import config
-    import run
-
-    return config, run
-
+# Importaciones absolutas directas al paquete del ejemplo
+from examples.filamento_whim import config as cfg
+from examples.filamento_whim import run
 
 def test_barrido_angular_produce_orientaciones_distintas_del_filamento(tmp_path):
+    importlib.reload(cfg)
     # Perspectiva de físico: el objetivo de este ticket es poder recorrer
     # theta sin tocar los.py. Se usa una malla chica (corre en segundos)
     # y solo 3 ángulos representativos: 0 (de frente), 45 y 90 (de lado).
-    cfg, run = _cargar_ejemplo()
     cfg.N_BASE = 12
 
     angulos = np.array([0.0, np.pi / 4, np.pi / 2])

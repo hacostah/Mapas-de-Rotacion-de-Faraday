@@ -3,16 +3,15 @@ from __future__ import annotations
 import numpy as np
 import sys
 import os
+import importlib
+
 from faradaymr import BetaModel, DensityProfile, GaussianRandomVectorField, get_backend
-# Importamos la nueva función geométrica 
 from faradaymr.simulation.geometry import cylindrical_radius
 
-# Buscamos la ruta de config
-ruta_config = os.path.abspath(os.path.join(os.path.dirname(__file__), '../icm_faraday_rotation'))
-if ruta_config not in sys.path:
-    sys.path.insert(0, ruta_config)
-
-import config as cfg
+# Import absoluto para asegurar que se carga la configuración correcta del filamento
+from examples.filamento_whim import config as cfg
+# Forzamos la recarga para eludir silenciosos errores de caché en sys.modules durante los tests
+importlib.reload(cfg)
 
 
 def construir_escenario(
