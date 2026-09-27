@@ -4,5 +4,8 @@ matplotlib
 astropy
 h5py
 
-# Opcional: aceleración por GPU (requiere CUDA instalado).
-# cupy
+# GPU (Colab): instalar la build de cupy que coincide con el CUDA de la
+# imagen (ver Faraday_MR_Colab.ipynb, celda 1). No se fija una versión
+# aquí porque depende del runtime de Colab en el momento de correr, no
+# de este proyecto -en local sin GPU, dejar comentada.
+# cupy-cuda12x

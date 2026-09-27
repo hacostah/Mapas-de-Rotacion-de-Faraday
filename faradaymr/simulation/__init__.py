@@ -6,6 +6,7 @@ from .profiles import (
     TabulatedProfile,
     beta_model,
 )
+from .galactic_disk import GalacticDiskProfile, spiral_arm_density_factor
 
 __all__ = [
     "DensityProfile",
@@ -14,4 +15,6 @@ __all__ = [
     "NFWModel",
     "TabulatedProfile",
     "beta_model",
+    "GalacticDiskProfile",
+    "spiral_arm_density_factor",
 ]

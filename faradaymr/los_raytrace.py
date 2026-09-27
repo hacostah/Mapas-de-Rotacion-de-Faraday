@@ -90,6 +90,7 @@ from __future__ import annotations
 import math
 
 from . import los
+from .backend import to_numpy
 
 
 def _map_coordinates_callable(xp):
@@ -243,12 +244,32 @@ def ray_box_exit_distance(observer_pos, direction, box_size, xp=None):
     lo está, el resultado puede ser negativo o sin sentido físico; no se
     valida aquí porque el caso de uso previsto -Proyecto III- siempre tiene
     al observador dentro).
+
+    Acepta tanto un solo rayo (`direction` de forma `(3,)`, devuelve un
+    escalar) como un lote de rayos (`direction` de forma `(3, N)` o
+    `(3, ...)` en general, devuelve un arreglo con la forma de las
+    dimensiones extra). Es la misma álgebra en ambos casos -solo cambia si
+    `observer_pos`/`box_size` se difunden (broadcast) sobre dimensiones
+    extra o no- por lo que no hace falta una función separada para el caso
+    vectorizado (necesario para procesar todos los píxeles de `sky_map` en
+    un solo lote, en vez de un rayo a la vez, ver nota de paralelismo en el
+    docstring del módulo).
     """
     if xp is None:
         import numpy as xp
     observer_pos = xp.asarray(observer_pos, dtype=float)
     direction = xp.asarray(direction, dtype=float)
     box_size = xp.asarray(box_size, dtype=float) * xp.ones(3)
+
+    es_lote = direction.ndim > 1
+    if es_lote:
+        # direction tiene forma (3, ...N); observer_pos/box_size son (3,) y
+        # deben difundirse sobre las dimensiones extra agregando ejes (1,)
+        # de más, para que la división elemento a elemento que sigue
+        # broadcastee correctamente contra cada rayo del lote.
+        forma_extra = (1,) * (direction.ndim - 1)
+        observer_pos = observer_pos.reshape(3, *forma_extra)
+        box_size = box_size.reshape(3, *forma_extra)
 
     # dir_i == 0 -> el rayo nunca avanza en ese eje, así que ese eje no debe
     # acotar la salida; se satura a un valor casi nulo (en vez de dividir
@@ -258,7 +279,8 @@ def ray_box_exit_distance(observer_pos, direction, box_size, xp=None):
     t_pared_0 = (0.0 - observer_pos) / dir_seguro
     t_pared_1 = (box_size - observer_pos) / dir_seguro
     t_salida_por_eje = xp.maximum(t_pared_0, t_pared_1)
-    return float(xp.min(t_salida_por_eje))
+    t_salida = xp.min(t_salida_por_eje, axis=0)
+    return t_salida if es_lote else float(t_salida)
 
 
 def _base_perpendicular_al_rayo(direction, xp=None):
@@ -381,6 +403,122 @@ def sample_fields_along_ray(
     }
 
 
+def _sky_map_chunk(
+    bx,
+    by,
+    bz,
+    ne,
+    ne_rel,
+    observer_pos,
+    dx,
+    box_size,
+    l_chunk,
+    b_chunk,
+    dl,
+    frequency,
+    wavelength,
+    p_index,
+    margin,
+    xp,
+    mode,
+):
+    """
+    Calcula (RM, I, Q, U) para un lote de píxeles (l_chunk, b_chunk) -ambos
+    arreglos 1D de la misma longitud `n_pix`- en un solo paso vectorizado:
+    todas las direcciones del lote se muestrean con una única llamada a
+    `map_coordinates` por campo, en vez de una llamada por píxel.
+
+    Física idéntica a integrar un píxel a la vez (ver docstring de
+    `sky_map`); lo único que cambia es que cada rayo del lote tiene su
+    propio alcance dentro de la caja (`n_samples_por_rayo`, distinto para
+    cada dirección), así que se muestrea hasta el máximo del lote
+    (`n_max`) y se ponen a cero las muestras de `ne`/`ne_rel` más allá del
+    alcance real de cada rayo -esas muestras son, físicamente, puntos fuera
+    de la caja (o repetidos por el recorte `mode="nearest"` de
+    `map_coordinates`), no plasma real, así que no deben contribuir a
+    ninguna integral. Basta con anular `ne` y `ne_rel` ahí: RM y la
+    RM-acumulada dependen de `ne`, y la emisividad sincrotrón j_nu es
+    proporcional a `ne_rel`, así que un cero en cualquiera de las dos
+    anula exactamente la contribución de esa muestra a todas las integrales
+    (RM, I, Q, U) sin necesidad de tocar bx/by/bz.
+    """
+    n_pix = l_chunk.shape[0]
+
+    e_l, e_b, direction = los_frame_from_galactic(l_chunk, b_chunk, xp=xp)  # (3, n_pix)
+
+    t_salida = ray_box_exit_distance(observer_pos, direction, box_size, xp=xp)  # (n_pix,)
+    n_samples_por_rayo = xp.maximum(
+        1, xp.floor(t_salida * (1.0 - margin) / dl).astype(xp.int64)
+    )
+    n_max = int(to_numpy(n_samples_por_rayo).max())
+
+    pasos = xp.arange(n_max) * dl  # (n_max,)
+    # puntos: (3, n_pix, n_max) = observer_pos + direction * pasos, para
+    # todos los píxeles y todas las muestras del lote a la vez.
+    puntos = (
+        observer_pos.reshape(3, 1, 1)
+        + direction[:, :, None] * pasos[None, None, :]
+    )
+    coords = (puntos / dx).reshape(3, n_pix * n_max)
+
+    map_coordinates = _map_coordinates_callable(xp)
+    campos = {"bx": bx, "by": by, "bz": bz, "ne": ne, "ne_rel": ne_rel}
+    perfiles = {
+        nombre: map_coordinates(campo, coords, order=1, mode=mode).reshape(n_pix, n_max)
+        for nombre, campo in campos.items()
+    }
+
+    # Máscara de validez en el orden de muestreo original (índice 0 =
+    # observador): anula las muestras más allá del alcance real de cada
+    # rayo (ver docstring de esta función).
+    indice_muestra = xp.arange(n_max)[None, :]
+    valido = indice_muestra < n_samples_por_rayo[:, None]
+    perfiles["ne"] = xp.where(valido, perfiles["ne"], 0.0)
+    perfiles["ne_rel"] = xp.where(valido, perfiles["ne_rel"], 0.0)
+
+    # los.rotation_measure_cumulative/stokes_qu esperan al observador en el
+    # *último* índice (ver docstring del módulo); el muestreo lo deja en
+    # el primero, así que se invierte una sola vez, aquí, antes de usar
+    # esas funciones. Las muestras anuladas (más allá del alcance de cada
+    # rayo) quedan al principio del arreglo invertido -siguen sumando
+    # exactamente cero a cualquier suma o suma acumulada, sin importar en
+    # qué extremo del eje caigan.
+    perfiles = {nombre: xp.flip(perfil, axis=-1) for nombre, perfil in perfiles.items()}
+    pne = perfiles["ne"]
+    pne_rel = perfiles["ne_rel"]
+
+    # bz de la caja NO es "la componente paralela a la línea de visión"
+    # aquí -eso solo es cierto cuando la LOS es el eje z fijo (caso
+    # `pipeline.py`). Con observador interior la LOS es `direction`, así
+    # que el campo se reexpresa primero en el marco local de cada rayo
+    # (ver `project_field_to_los_frame`): b1/b2 hacen el papel de bx/by
+    # (plano del cielo) y b_par el de bz (a lo largo de la LOS) en las
+    # funciones de `los.py`. `direction`/`e_l`/`e_b` tienen forma (3,
+    # n_pix); se agrega un eje de más (`[..., None]`) para que
+    # broadcasteen contra los perfiles (n_pix, n_max).
+    b1, b2, b_par = project_field_to_los_frame(
+        perfiles["bx"],
+        perfiles["by"],
+        perfiles["bz"],
+        direction[:, :, None],
+        xp=xp,
+        basis=(e_l[:, :, None], e_b[:, :, None]),
+    )
+
+    b_perp = los.perpendicular_field_magnitude(b1, b2, b_par, xp=xp)
+    j_nu = los.synchrotron_emissivity(b_perp, pne_rel, frequency, p_index, xp=xp)
+    i_chunk = los.synchrotron_intensity(j_nu, dl, axis=-1, xp=xp)
+
+    psi_0 = los.polarization_angle_intrinsic(b1, b2, xp=xp)
+    rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl, axis=-1, xp=xp)
+    q_chunk, u_chunk = los.stokes_qu(
+        j_nu, psi_0, rm_cumulative, wavelength, p_index, dl, axis=-1, xp=xp
+    )
+    rm_chunk = los.rotation_measure(pne, b_par, dl, axis=-1, xp=xp)
+
+    return rm_chunk, i_chunk, q_chunk, u_chunk
+
+
 def sky_map(
     bx,
     by,
@@ -399,6 +537,7 @@ def sky_map(
     margin=1e-6,
     xp=None,
     mode="nearest",
+    pixel_chunk_size=4096,
 ):
     """
     Mapa de cielo (l, b) en grilla regular -RM, I, Q, U- visto por un
@@ -409,22 +548,39 @@ def sky_map(
     Por cada píxel (l, b): calcula la dirección del rayo junto con la base
     tangente local del cielo (`los_frame_from_galactic`, ver nota sobre
     Q/U en el docstring del módulo), muestrea bx, by, bz, ne, ne_rel a lo
-    largo de ese rayo hasta el borde de la caja (`sample_fields_along_ray`),
-    y aplica sobre esos perfiles 1D las mismas funciones de integración de
-    `faradaymr.los` que ya se usan para el ICM -sin modificarlas: para esas
-    funciones un perfil muestreado a lo largo de un rayo es indistinguible
-    de un corte a lo largo del eje fijo de la caja, ambos son solo "un
-    arreglo con la línea de visión en el último eje".
+    largo de ese rayo hasta el borde de la caja, y aplica sobre esos
+    perfiles las mismas funciones de integración de `faradaymr.los` que ya
+    se usan para el ICM -sin modificarlas: para esas funciones un perfil
+    muestreado a lo largo de un rayo es indistinguible de un corte a lo
+    largo del eje fijo de la caja, ambos son solo "un arreglo con la línea
+    de visión en el último eje".
+
+    Paralelismo (importante para correr en GPU): a diferencia de una
+    versión anterior de esta función, que hacía un doble bucle explícito
+    en Python sobre cada píxel (l, b) -correcto, pero con un lanzamiento de
+    kernel de `map_coordinates` por píxel, que en una GPU desperdicia casi
+    todo el tiempo en overhead de lanzamiento en vez de cómputo real-, esta
+    versión resuelve TODOS los píxeles de un lote (`pixel_chunk_size` de
+    ellos a la vez) en una sola llamada vectorizada a `map_coordinates` por
+    campo (bx, by, bz, ne, ne_rel): construye las coordenadas de muestreo
+    de los `n_pix` rayos del lote como un único arreglo (3, n_pix*n_max) y
+    dispara un solo kernel. Como cada rayo tiene un alcance distinto dentro
+    de la caja, se muestrea hasta el máximo del lote (`n_max`) y se anulan
+    (ver `_sky_map_chunk`) las muestras que caen más allá del alcance real
+    de cada rayo particular -el resultado es matemáticamente idéntico al
+    del bucle explícito, célda por célda, solo que expresado como álgebra
+    de arreglos en vez de un bucle interpretado por Python. `pixel_chunk_size`
+    acota cuántos rayos se resuelven a la vez (y por lo tanto la memoria
+    pico: `pixel_chunk_size * n_max * 3` flotantes por campo), para que un
+    mapa de alta resolución no intente reservar de golpe más memoria de GPU
+    de la que hay disponible; un solo lote (`pixel_chunk_size >= n_l*n_b`)
+    es la opción más rápida cuando la memoria alcanza.
 
     No se usa healpix ni ninguna proyección esférica: `l_grid`/`b_grid` son
-    simplemente los valores (en radianes) de una grilla rectangular
-    l x b, adecuada para un primer modelo de juguete. Es un doble bucle
-    explícito sobre los píxeles (no vectorizado entre píxeles, cada uno
-    tiene su propio `n_samples` porque la distancia al borde de la caja
-    depende de la dirección) -para el tamaño de grilla de un modelo de
-    juguete es explícito y suficientemente rápido; vectorizar el bucle de
-    píxeles (rellenando con padding hasta el n_samples máximo) es una
-    optimización a futuro, no una corrección de física.
+    simplemente los valores (en radianes) de una grilla rectangular l x b,
+    adecuada para un primer modelo de juguete (ver `faradaymr.plotting_sky`
+    para desplegar esta grilla con una proyección de igual área tipo
+    Mollweide, como las figuras de Waelkens et al. 2008).
 
     Devuelve
     --------
@@ -436,66 +592,50 @@ def sky_map(
 
     n_l = len(l_grid)
     n_b = len(b_grid)
-    rm_map = xp.zeros((n_l, n_b))
-    i_map = xp.zeros((n_l, n_b))
-    q_map = xp.zeros((n_l, n_b))
-    u_map = xp.zeros((n_l, n_b))
+    n_pix = n_l * n_b
 
-    for i_l in range(n_l):
-        for i_b in range(n_b):
-            e_l, e_b, direction = los_frame_from_galactic(
-                l_grid[i_l], b_grid[i_b], xp=xp
-            )
-            perfiles = sample_fields_along_ray(
-                {"bx": bx, "by": by, "bz": bz, "ne": ne, "ne_rel": ne_rel},
-                observer_pos,
-                direction,
-                dl,
-                dx,
-                box_size,
-                margin=margin,
-                xp=xp,
-                mode=mode,
-            )
+    observer_pos = xp.asarray(observer_pos, dtype=float)
+    l_grid = xp.asarray(l_grid, dtype=float)
+    b_grid = xp.asarray(b_grid, dtype=float)
 
-            # los.rotation_measure_cumulative/stokes_qu esperan al
-            # observador en el *último* índice (ver docstring del módulo);
-            # sample_line_of_sight lo deja en el primero, así que se
-            # invierte una sola vez, aquí, antes de usar esas funciones.
-            perfiles_obs_al_final = {
-                nombre: xp.flip(perfil, axis=-1) for nombre, perfil in perfiles.items()
-            }
-            pne = perfiles_obs_al_final["ne"]
-            pne_rel = perfiles_obs_al_final["ne_rel"]
+    ll, bb = xp.meshgrid(l_grid, b_grid, indexing="ij")  # (n_l, n_b) cada uno
+    l_flat = ll.reshape(-1)
+    b_flat = bb.reshape(-1)
 
-            # bz de la caja NO es "la componente paralela a la línea de
-            # visión" aquí -eso solo es cierto cuando la LOS es el eje z
-            # fijo (caso `pipeline.py`). Con observador interior la LOS es
-            # `direction`, así que el campo se reexpresa primero en el
-            # marco local del rayo (ver `project_field_to_los_frame`):
-            # b1/b2 hacen el papel de bx/by (plano del cielo) y b_par el
-            # de bz (a lo largo de la LOS) en las funciones de `los.py`.
-            b1, b2, b_par = project_field_to_los_frame(
-                perfiles_obs_al_final["bx"],
-                perfiles_obs_al_final["by"],
-                perfiles_obs_al_final["bz"],
-                direction,
-                xp=xp,
-                basis=(e_l, e_b),
-            )
+    rm_flat = xp.empty(n_pix)
+    i_flat = xp.empty(n_pix)
+    q_flat = xp.empty(n_pix)
+    u_flat = xp.empty(n_pix)
 
-            b_perp = los.perpendicular_field_magnitude(b1, b2, b_par, xp=xp)
-            j_nu = los.synchrotron_emissivity(b_perp, pne_rel, frequency, p_index, xp=xp)
-            i_map[i_l, i_b] = los.synchrotron_intensity(j_nu, dl, axis=-1, xp=xp)
+    for inicio in range(0, n_pix, pixel_chunk_size):
+        fin = min(inicio + pixel_chunk_size, n_pix)
+        rm_chunk, i_chunk, q_chunk, u_chunk = _sky_map_chunk(
+            bx,
+            by,
+            bz,
+            ne,
+            ne_rel,
+            observer_pos,
+            dx,
+            box_size,
+            l_flat[inicio:fin],
+            b_flat[inicio:fin],
+            dl,
+            frequency,
+            wavelength,
+            p_index,
+            margin,
+            xp,
+            mode,
+        )
+        rm_flat[inicio:fin] = rm_chunk
+        i_flat[inicio:fin] = i_chunk
+        q_flat[inicio:fin] = q_chunk
+        u_flat[inicio:fin] = u_chunk
 
-            psi_0 = los.polarization_angle_intrinsic(b1, b2, xp=xp)
-            rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl, axis=-1, xp=xp)
-            q_val, u_val = los.stokes_qu(
-                j_nu, psi_0, rm_cumulative, wavelength, p_index, dl, axis=-1, xp=xp
-            )
-            q_map[i_l, i_b] = q_val
-            u_map[i_l, i_b] = u_val
-
-            rm_map[i_l, i_b] = los.rotation_measure(pne, b_par, dl, axis=-1, xp=xp)
-
-    return rm_map, i_map, q_map, u_map
+    return (
+        rm_flat.reshape(n_l, n_b),
+        i_flat.reshape(n_l, n_b),
+        q_flat.reshape(n_l, n_b),
+        u_flat.reshape(n_l, n_b),
+    )

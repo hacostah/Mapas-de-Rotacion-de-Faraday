@@ -14,6 +14,11 @@ from .fields import GaussianRandomVectorField
 from .io import load_fits, load_hdf5, load_map, save_fits, save_hdf5, save_maps
 from .logging_config import configurar_logging, generar_id_simulacion, medir_tiempo_kernel
 from .plotting import Plotter
+from .plotting_sky import (
+    figura_estilo_hammurabi,
+    mapa_sintetico_estilo_hammurabi,
+    mollweide_panel,
+)
 from .simulation import (
     BetaModel,
     DensityProfile,
@@ -47,6 +52,9 @@ __all__ = [
     "save_hdf5",
     "load_hdf5",
     "Plotter",
+    "mollweide_panel",
+    "figura_estilo_hammurabi",
+    "mapa_sintetico_estilo_hammurabi",
 ]
 
 __version__ = "0.2.0"
