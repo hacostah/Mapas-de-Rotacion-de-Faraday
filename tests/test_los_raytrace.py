@@ -137,6 +137,90 @@ def test_sky_map_rm_analitica_para_campo_uniforme():
     assert np.isclose(rm_map[0, 0], rm_esperada)
 
 
+def test_project_field_to_los_frame_con_direccion_z_recupera_bx_by_bz():
+    # Cuando la línea de visión coincide con el eje z de la caja (caso
+    # que `los.py` ya asumía siempre), proyectar al marco del rayo debe
+    # reproducir exactamente esa convención: b_parallel = bz, y
+    # sqrt(b1^2+b2^2) = sqrt(bx^2+by^2) (la base (e1,e2) puede salir
+    # rotada respecto a (x,y), pero la magnitud en el plano del cielo no
+    # depende de esa rotación).
+    rng = np.random.RandomState(3)
+    bx, by, bz = rng.normal(size=(3, 50))
+    direction = np.array([0.0, 0.0, 1.0])
+
+    b1, b2, b_par = lr.project_field_to_los_frame(bx, by, bz, direction, xp=np)
+
+    assert np.allclose(b_par, bz)
+    assert np.allclose(np.sqrt(b1**2 + b2**2), np.sqrt(bx**2 + by**2))
+
+
+def test_project_field_to_los_frame_componente_paralela_es_producto_punto():
+    # Para cualquier dirección (no solo z), b_parallel debe ser
+    # exactamente la proyección del campo sobre esa dirección -la
+    # definición misma de "componente paralela a la línea de visión".
+    rng = np.random.RandomState(4)
+    bx, by, bz = rng.normal(size=(3, 30))
+    direction = lr.direction_from_galactic(np.radians(40.0), np.radians(15.0), xp=np)
+
+    _, _, b_par = lr.project_field_to_los_frame(bx, by, bz, direction, xp=np)
+    esperado = direction[0] * bx + direction[1] * by + direction[2] * bz
+
+    assert np.allclose(b_par, esperado)
+
+
+def test_sky_map_rm_con_campo_en_x_mirando_hacia_l0_b0():
+    # Prueba de regresión del bug real que motivó `project_field_to_los_
+    # frame`: con un campo puramente a lo largo de x (bx=B0, by=bz=0) y
+    # mirando exactamente hacia (l=0, b=0) -es decir, direction=(1,0,0)-
+    # la componente paralela a la línea de visión es bx en su totalidad,
+    # no bz. Antes de la corrección, `sky_map` reusaba bz "crudo" como si
+    # la LOS fuera siempre el eje z de la caja (válido solo para el caso
+    # de observador externo de `pipeline.py`); con bz=0 en todas partes,
+    # esa versión daba RM=0 sin que hubiera ninguna cancelación física
+    # real -solo se estaba proyectando sobre el eje equivocado.
+    n_celdas = 60
+    dx = 1.0
+    box_size = n_celdas * dx
+    ne_val = 1e-3
+    b0 = 2.0
+
+    ne = np.full((n_celdas, n_celdas, n_celdas), ne_val)
+    bx = np.full((n_celdas, n_celdas, n_celdas), b0)
+    by = np.zeros_like(bx)
+    bz = np.zeros_like(bx)  # a propósito: si el bug reapareciera, RM daría 0
+    ne_rel = np.zeros_like(ne)
+
+    observer_pos = np.array([box_size / 2, box_size / 2, box_size / 2])
+    dl = 0.5
+    l_grid = np.array([0.0])
+    b_grid = np.array([0.0])
+
+    rm_map, _, _, _ = lr.sky_map(
+        bx,
+        by,
+        bz,
+        ne,
+        ne_rel,
+        observer_pos,
+        dx,
+        box_size,
+        l_grid,
+        b_grid,
+        dl,
+        frequency=1.0,
+        wavelength=0.0,
+        p_index=3.0,
+        xp=np,
+    )
+
+    t_salida_esperado = box_size - observer_pos[0]  # dirección +x, desde el centro
+    n_samples_esperado = int(np.floor((t_salida_esperado * (1 - 1e-6)) / dl))
+    rm_esperada = 0.812 * ne_val * b0 * n_samples_esperado * dl
+
+    assert np.isclose(rm_map[0, 0], rm_esperada)
+    assert not np.isclose(rm_map[0, 0], 0.0)
+
+
 def test_sky_map_devuelve_forma_correcta():
     n_celdas = 12
     dx = 1.0

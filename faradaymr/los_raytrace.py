@@ -49,6 +49,22 @@ Convención de ejes y unidades:
   "acumulado desde cada punto hasta el borde final de la línea de
   visión"), este módulo invierte el perfil una sola vez, justo después de
   muestrear, antes de llamar a esas funciones -ver `sky_map`.
+
+Un punto que NO es solo cambiar el eje de integración: en `los.py`, "bz" no
+es "la componente z del campo" en abstracto, es *la componente paralela a
+la línea de visión*, y eso solo coincide con bz porque ahí la LOS siempre
+es el eje z fijo de la caja. Con un observador interior la LOS es la
+dirección (l, b), que para una línea de visión en el plano galáctico
+(b≈0) casi no tiene componente z -usar bz directamente ahí sería casi
+siempre cero, sin que eso signifique que no hay señal física. Por eso,
+antes de llamar a `los.perpendicular_field_magnitude`/
+`rotation_measure`/`stokes_qu`, `sky_map` reexpresa el campo muestreado
+(bx, by, bz de la caja) en el marco local de cada rayo -dos ejes en el
+plano del cielo perpendicular al rayo, y uno a lo largo de él- con
+`project_field_to_los_frame`. Esa proyección es la única parte nueva; las
+funciones de `los.py` en sí no cambian, solo dejan de recibir bz "crudo" y
+reciben la componente ya proyectada a lo largo de la LOS que de verdad les
+corresponde en su firma.
 """
 
 from __future__ import annotations
@@ -189,6 +205,66 @@ def ray_box_exit_distance(observer_pos, direction, box_size, xp=None):
     return float(xp.min(t_salida_por_eje))
 
 
+def _base_perpendicular_al_rayo(direction, xp=None):
+    """
+    Construye una base ortonormal (e1, e2) del plano perpendicular a
+    `direction`, para poder expresar un campo vectorial muestreado a lo
+    largo del rayo en un marco local donde la línea de visión juega el
+    papel del eje z -el mismo papel que el eje z de la caja jugaba en
+    `faradaymr.los` para el caso de observador externo con LOS fija (ver
+    nota al final del docstring del módulo).
+
+    Se elige un vector de referencia no paralelo a `direction` (el eje z
+    de la caja, salvo que `direction` ya esté casi alineado con z, en
+    cuyo caso se usa el eje x -si no, el producto cruz de dos vectores
+    casi paralelos sería casi nulo y la base saldría mal condicionada) y
+    se construye e1 = normalizar(referencia x direction),
+    e2 = direction x e1: (e1, e2, direction) queda ortonormal por
+    construcción, para cualquier `direction` unitaria.
+    """
+    if xp is None:
+        import numpy as xp
+    direction = xp.asarray(direction, dtype=float)
+    referencia = xp.array([0.0, 0.0, 1.0])
+    if abs(float(direction[2])) > 0.99:
+        referencia = xp.array([1.0, 0.0, 0.0])
+    e1 = xp.cross(referencia, direction)
+    e1 = e1 / xp.linalg.norm(e1)
+    e2 = xp.cross(direction, e1)
+    return e1, e2
+
+
+def project_field_to_los_frame(bx_perfil, by_perfil, bz_perfil, direction, xp=None):
+    """
+    Reexpresa un campo magnético ya muestreado a lo largo de un rayo (en
+    las coordenadas x, y, z de la caja) en el marco local *de ese rayo*:
+    (b1, b2) en el plano del cielo perpendicular a la línea de visión, y
+    b_parallel a lo largo de la línea de visión -exactamente los papeles
+    que `faradaymr.los` espera de (bx, by, bz) cuando asume que z es la
+    LOS fija (ver `perpendicular_field_magnitude`, `inclination_angle`,
+    `polarization_angle_intrinsic`, `rotation_measure*`).
+
+    Como `direction` es constante a lo largo de todo el rayo (el
+    observador no cambia de dirección de un punto muestreado al
+    siguiente), la proyección es la misma combinación lineal fija en cada
+    punto: no hace falta una rotación por muestra, una sola base (e1, e2,
+    direction) sirve para el rayo completo.
+
+    Devuelve (b1, b2, b_parallel), cada uno con la misma forma que
+    `bx_perfil`/`by_perfil`/`bz_perfil` (típicamente perfiles 1D).
+    """
+    if xp is None:
+        import numpy as xp
+    direction = xp.asarray(direction, dtype=float)
+    e1, e2 = _base_perpendicular_al_rayo(direction, xp=xp)
+    b1 = e1[0] * bx_perfil + e1[1] * by_perfil + e1[2] * bz_perfil
+    b2 = e2[0] * bx_perfil + e2[1] * by_perfil + e2[2] * bz_perfil
+    b_parallel = (
+        direction[0] * bx_perfil + direction[1] * by_perfil + direction[2] * bz_perfil
+    )
+    return b1, b2, b_parallel
+
+
 def sample_fields_along_ray(
     fields,
     observer_pos,
@@ -317,24 +393,36 @@ def sky_map(
             perfiles_obs_al_final = {
                 nombre: xp.flip(perfil, axis=-1) for nombre, perfil in perfiles.items()
             }
-            pbx = perfiles_obs_al_final["bx"]
-            pby = perfiles_obs_al_final["by"]
-            pbz = perfiles_obs_al_final["bz"]
             pne = perfiles_obs_al_final["ne"]
             pne_rel = perfiles_obs_al_final["ne_rel"]
 
-            b_perp = los.perpendicular_field_magnitude(pbx, pby, pbz, xp=xp)
+            # bz de la caja NO es "la componente paralela a la línea de
+            # visión" aquí -eso solo es cierto cuando la LOS es el eje z
+            # fijo (caso `pipeline.py`). Con observador interior la LOS es
+            # `direction`, así que el campo se reexpresa primero en el
+            # marco local del rayo (ver `project_field_to_los_frame`):
+            # b1/b2 hacen el papel de bx/by (plano del cielo) y b_par el
+            # de bz (a lo largo de la LOS) en las funciones de `los.py`.
+            b1, b2, b_par = project_field_to_los_frame(
+                perfiles_obs_al_final["bx"],
+                perfiles_obs_al_final["by"],
+                perfiles_obs_al_final["bz"],
+                direction,
+                xp=xp,
+            )
+
+            b_perp = los.perpendicular_field_magnitude(b1, b2, b_par, xp=xp)
             j_nu = los.synchrotron_emissivity(b_perp, pne_rel, frequency, p_index, xp=xp)
             i_map[i_l, i_b] = los.synchrotron_intensity(j_nu, dl, axis=-1, xp=xp)
 
-            psi_0 = los.polarization_angle_intrinsic(pbx, pby, xp=xp)
-            rm_cumulative = los.rotation_measure_cumulative(pne, pbz, dl, axis=-1, xp=xp)
+            psi_0 = los.polarization_angle_intrinsic(b1, b2, xp=xp)
+            rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl, axis=-1, xp=xp)
             q_val, u_val = los.stokes_qu(
                 j_nu, psi_0, rm_cumulative, wavelength, p_index, dl, axis=-1, xp=xp
             )
             q_map[i_l, i_b] = q_val
             u_map[i_l, i_b] = u_val
 
-            rm_map[i_l, i_b] = los.rotation_measure(pne, pbz, dl, axis=-1, xp=xp)
+            rm_map[i_l, i_b] = los.rotation_measure(pne, b_par, dl, axis=-1, xp=xp)
 
     return rm_map, i_map, q_map, u_map
