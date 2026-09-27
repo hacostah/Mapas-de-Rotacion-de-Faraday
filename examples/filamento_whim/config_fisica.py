@@ -12,6 +12,9 @@ N0 = 1e-5 * (u.cm**-3)
 # a diferencia de la extensión total que sí ronda 1-2 Mpc (Tudorache et al. 2025).
 RC = 300.0 * u.kpc  
 
+# Longitud fisica del filamento (extensión total)
+LONGITUD_FILAMENTO = 2000.0 * u.kpc
+
 # Índice de caída radial. Se define en 0.5 para diferenciarlo del perfil más 
 # concentrado (2/3) utilizado canónicamente en los cúmulos de galaxias.
 BETA = 0.5
