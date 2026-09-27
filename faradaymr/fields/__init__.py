@@ -1,4 +1,5 @@
 from .gaussian_random_field import GaussianRandomVectorField
+from .spiral_field import LogarithmicSpiralField
 
 # Los perfiles de densidad radial (beta, doble beta, NFW, tabulado) vivían
 # antes en `fields.profiles`, pero conceptualmente no son "campos"
@@ -18,6 +19,7 @@ from ..simulation import (
 
 __all__ = [
     "GaussianRandomVectorField",
+    "LogarithmicSpiralField",
     "DensityProfile",
     "BetaModel",
     "DoubleBetaModel",
