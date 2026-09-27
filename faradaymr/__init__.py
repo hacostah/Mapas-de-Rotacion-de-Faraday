@@ -23,6 +23,7 @@ from .simulation import (
     beta_model,
 )
 from .pipeline import ObservationConfig, ObservationPipeline, ObservationResult
+from .analysis.spatial_stats import radial_profile, transverse_rm_dispersion
 
 __all__ = [
     "get_backend",
@@ -47,6 +48,8 @@ __all__ = [
     "save_hdf5",
     "load_hdf5",
     "Plotter",
+    "radial_profile",
+    "transverse_rm_dispersion",
 ]
 
 __version__ = "0.2.0"
