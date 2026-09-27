@@ -4,6 +4,7 @@ import os
 import sys
 import numpy as np
 import astropy.units as u
+import logging
 
 # Importaciones del proyecto (rutas relativas a examples/filamento_whim)
 from examples.filamento_whim.model import construir_escenario
@@ -97,23 +98,81 @@ def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=False, n_bins=12, see
     }
 
 
+def barrer_angulos_monte_carlo(
+    thetas_grados, 
+    ruta_resultados, 
+    n_semillas=10, 
+    use_gpu=False, 
+    n_bins=12
+):
+    """
+    Orquesta múltiples realizaciones aleatorias (Monte Carlo) del barrido angular.
+    
+    Costo Computacional (Congreso 2026):
+    - Complejidad: N_semillas × N_thetas ejecuciones del pipeline.
+    - Para una malla N=128 en CPU, cada corrida toma ~1-2s. 
+      Con 10 ángulos y 10 semillas (100 corridas), el tiempo total es de ~2 minutos.
+    - Decisión: Para los resultados del entregable (póster/paper), `n_semillas=10` 
+      es el balance óptimo. Provee suficiente estadística para estabilizar la barra 
+      de error (width_std_kpc) sin requerir el salto a un cluster o tiempos 
+      prohibitivos en CPU local.
+    """
+    logger = logging.getLogger(__name__)
+    logger.info("Iniciando Monte Carlo: %d semillas x %d ángulos = %d corridas totales.", 
+                n_semillas, len(thetas_grados), n_semillas * len(thetas_grados))
+    
+    anchos_por_theta = []
+    sigma0_por_theta = []
+    
+    for semilla in range(n_semillas):
+        logger.info("--- Ejecutando semilla Monte Carlo %d/%d ---", semilla + 1, n_semillas)
+        resultado = barrer_angulos(
+            thetas_grados, 
+            ruta_resultados, 
+            use_gpu=use_gpu, 
+            n_bins=n_bins, 
+            seed=semilla
+        )
+        anchos_por_theta.append(resultado["width_kpc"])
+        sigma0_por_theta.append(resultado["sigma0"])
+
+    # Convertir a matrices de NumPy, forma: (n_semillas, n_thetas)
+    anchos_por_theta = np.array(anchos_por_theta)
+    sigma0_por_theta = np.array(sigma0_por_theta)
+    
+    logger.info("Monte Carlo finalizado exitosamente.")
+
+    return {
+        "theta_grados": np.array(thetas_grados),
+        "width_medio_kpc": anchos_por_theta.mean(axis=0),
+        "width_std_kpc": anchos_por_theta.std(axis=0),
+        "sigma0_medio": sigma0_por_theta.mean(axis=0),
+        "sigma0_std": sigma0_por_theta.std(axis=0),
+    }
+
 if __name__ == "__main__":
-    import os
-    import numpy as np
+    import config
+    
+    # Leemos los ángulos definidos en config.py
+    angulos = config.THETAS_BARRIDO if hasattr(config, "THETAS_BARRIDO") else np.linspace(0, 85, 10)
     
     ruta_salida = os.path.join(os.path.dirname(__file__), "results", "barrido_theta")
     os.makedirs(ruta_salida, exist_ok=True)
     
     try:
-        resultados = barrer_angulos(
-            # Definimos los ángulos 
-            thetas_grados=np.linspace(0, 85, 10), 
+        # Reemplazamos la llamada a barrer_angulos por la versión Monte Carlo
+        resultados = barrer_angulos_monte_carlo(
+            thetas_grados=angulos,
             ruta_resultados=ruta_salida,
+            n_semillas=10,  # Decidido explícitamente para el congreso
             use_gpu=False,
         )
-        np.savez(os.path.join(ruta_salida, "barrido_theta.npz"), **resultados)
-        print("Barrido finalizado correctamente.")
+        
+        archivo_npz = os.path.join(ruta_salida, "barrido_theta_mc.npz")
+        np.savez(archivo_npz, **resultados)
+        print(f"Barrido Monte Carlo finalizado correctamente. Resultados guardados en {archivo_npz}")
+        
     except Exception as e:
-        print(f"Error durante el barrido: {e}")
+        print(f"Error durante el barrido Monte Carlo: {e}")
         import sys
         sys.exit(1)
