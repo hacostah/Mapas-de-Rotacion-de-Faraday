@@ -157,7 +157,9 @@ def ejecutar_corrida(
     # (que depende solo de n_e, un chequeo independiente del campo
     # magnético que aísla si el problema -de haberlo- está en la densidad
     # o en el campo).
-    direccion_polo = los_raytrace.direction_from_galactic(0.0, xp.radians(cfg.B_MAX_DEG), xp=xp)
+    direccion_polo = los_raytrace.direction_from_galactic(
+        0.0, xp.radians(cfg.B_MAX_DEG), xp=xp
+    )
     dm_polo = dm_hacia_direccion(
         ne, observer_pos, direccion_polo, cfg.DL_KPC, dx, box_size, xp=xp
     )
