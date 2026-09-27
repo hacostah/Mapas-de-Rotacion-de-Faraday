@@ -13,6 +13,7 @@ P_SPEC = cfg_units.P_SPEC
 DX_BASE_KPC = cfg_units.DX_BASE.to(u.kpc).value
 N0_CM3 = cfg_units.N0.to(u.cm**-3).value
 RC_KPC = cfg_units.RC.to(u.kpc).value
+LONGITUD_FILAMENTO_KPC = cfg_units.LONGITUD_FILAMENTO.to(u.kpc).value
 B0_MG = cfg_units.B0.to(u.microgauss).value
 LAMBDA_MIN_KPC = cfg_units.LAMBDA_MIN.to(u.kpc).value
 LAMBDA_MAX_KPC = cfg_units.LAMBDA_MAX.to(u.kpc).value
