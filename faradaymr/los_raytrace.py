@@ -65,6 +65,24 @@ plano del cielo perpendicular al rayo, y uno a lo largo de él- con
 funciones de `los.py` en sí no cambian, solo dejan de recibir bz "crudo" y
 reciben la componente ya proyectada a lo largo de la LOS que de verdad les
 corresponde en su firma.
+
+Elección de los dos ejes del "plano del cielo" (e1, e2) perpendiculares a
+la LOS: para RM e I (que no dependen de ángulo, solo de magnitudes) esa
+elección es irrelevante. Pero para `psi_0`/Q/U sí importa *qué* dirección
+del plano del cielo se llama "ángulo cero": una base construida de forma
+arbitraria por rayo (`_base_perpendicular_al_rayo`, un producto cruz con
+un vector de referencia fijo) no varía suavemente de un píxel (l, b) al
+vecino, y además tiene un salto explícito de convención cerca de los
+polos (donde cambia el vector de referencia para no dividir por un
+producto cruz casi nulo). `sky_map` usa en cambio `los_frame_from_galactic`,
+la base tangente estándar de la esfera en (l, b) -(e_l, e_b), las
+direcciones de longitud y latitud crecientes- que varía suavemente en
+(l, b) en todas partes salvo en el polo mismo (una singularidad de
+coordenadas inherente a usar (l, b) en absoluto, no un defecto de esta
+implementación). `_base_perpendicular_al_rayo` se conserva como utilidad
+genérica (y como valor por defecto de `project_field_to_los_frame`) para
+quien muestree a lo largo de una `direction` que no venga de una grilla
+(l, b), donde no hay una base "natural" con la que compararla.
 """
 
 from __future__ import annotations
@@ -169,6 +187,44 @@ def direction_from_galactic(l, b, xp=None):
     return xp.stack([cb * xp.cos(l), cb * xp.sin(l), xp.sin(b)], axis=0)
 
 
+def los_frame_from_galactic(l, b, xp=None):
+    """
+    Base ortonormal tangente estándar de la esfera celeste en el punto
+    (l, b): (e_l, e_b, direction), con `direction` el vector radial (la
+    propia línea de visión, igual que `direction_from_galactic`), `e_l`
+    la dirección de longitud galáctica creciente y `e_b` la de latitud
+    creciente -la convención habitual en polarimetría para definir un
+    "plano del cielo" local en cada punto de un mapa (l, b) (a diferencia
+    de `_base_perpendicular_al_rayo`, que no sabe nada de (l, b) y elige
+    sus dos ejes de forma arbitraria).
+
+    Se obtienen derivando `direction(l, b)` respecto a cada coordenada:
+        e_l = d(direction)/dl, normalizado -> (-sin(l), cos(l), 0)
+        e_b = d(direction)/db, normalizado -> (-sin(b)cos(l), -sin(b)sin(l), cos(b))
+    Ambas ya salen unitarias y perpendiculares entre sí y a `direction`
+    sin necesidad de normalizar aparte (se puede verificar por sustitución
+    directa); a diferencia de la base arbitraria, esta varía de forma
+    continua en (l, b) -sin ningún salto de convención- excepto justo en
+    el polo (b=±90°), donde `l` deja de tener sentido (una singularidad de
+    coordenadas de la esfera misma, no algo que dependa de esta
+    implementación).
+
+    l, b pueden ser escalares o arreglos de la misma forma; se devuelve
+    (3,) o (3, N) respectivamente, igual que `direction_from_galactic`.
+    """
+    if xp is None:
+        import numpy as xp
+    l = xp.asarray(l, dtype=float)
+    b = xp.asarray(b, dtype=float)
+    direction = direction_from_galactic(l, b, xp=xp)
+    cero = xp.zeros_like(l)
+    e_l = xp.stack([-xp.sin(l), xp.cos(l), cero], axis=0)
+    e_b = xp.stack(
+        [-xp.sin(b) * xp.cos(l), -xp.sin(b) * xp.sin(l), xp.cos(b)], axis=0
+    )
+    return e_l, e_b, direction
+
+
 def ray_box_exit_distance(observer_pos, direction, box_size, xp=None):
     """
     Distancia `t` a la que el rayo `observer_pos + t*direction` sale de la
@@ -234,7 +290,9 @@ def _base_perpendicular_al_rayo(direction, xp=None):
     return e1, e2
 
 
-def project_field_to_los_frame(bx_perfil, by_perfil, bz_perfil, direction, xp=None):
+def project_field_to_los_frame(
+    bx_perfil, by_perfil, bz_perfil, direction, xp=None, basis=None
+):
     """
     Reexpresa un campo magnético ya muestreado a lo largo de un rayo (en
     las coordenadas x, y, z de la caja) en el marco local *de ese rayo*:
@@ -250,13 +308,24 @@ def project_field_to_los_frame(bx_perfil, by_perfil, bz_perfil, direction, xp=No
     punto: no hace falta una rotación por muestra, una sola base (e1, e2,
     direction) sirve para el rayo completo.
 
+    basis : tupla opcional (e1, e2) ya calculada. Si no se da, se
+    construye aquí mismo con `_base_perpendicular_al_rayo` (una base
+    válida pero arbitraria, sin relación con ninguna grilla (l, b)). Para
+    un mapa de cielo -donde sí existe una base "natural" en cada píxel-
+    `sky_map` pasa en cambio `los_frame_from_galactic(l, b)`, que varía
+    suavemente en (l, b) en vez de tener un salto de convención cerca de
+    los polos (ver la nota correspondiente en el docstring del módulo).
+
     Devuelve (b1, b2, b_parallel), cada uno con la misma forma que
     `bx_perfil`/`by_perfil`/`bz_perfil` (típicamente perfiles 1D).
     """
     if xp is None:
         import numpy as xp
     direction = xp.asarray(direction, dtype=float)
-    e1, e2 = _base_perpendicular_al_rayo(direction, xp=xp)
+    if basis is None:
+        e1, e2 = _base_perpendicular_al_rayo(direction, xp=xp)
+    else:
+        e1, e2 = basis
     b1 = e1[0] * bx_perfil + e1[1] * by_perfil + e1[2] * bz_perfil
     b2 = e2[0] * bx_perfil + e2[1] * by_perfil + e2[2] * bz_perfil
     b_parallel = (
@@ -337,10 +406,11 @@ def sky_map(
     de frente (ver `faradaymr.pipeline.ObservationPipeline`, que asume eso
     último).
 
-    Por cada píxel (l, b): calcula la dirección del rayo
-    (`direction_from_galactic`), muestrea bx, by, bz, ne, ne_rel a lo largo
-    de ese rayo hasta el borde de la caja (`sample_fields_along_ray`), y
-    aplica sobre esos perfiles 1D las mismas funciones de integración de
+    Por cada píxel (l, b): calcula la dirección del rayo junto con la base
+    tangente local del cielo (`los_frame_from_galactic`, ver nota sobre
+    Q/U en el docstring del módulo), muestrea bx, by, bz, ne, ne_rel a lo
+    largo de ese rayo hasta el borde de la caja (`sample_fields_along_ray`),
+    y aplica sobre esos perfiles 1D las mismas funciones de integración de
     `faradaymr.los` que ya se usan para el ICM -sin modificarlas: para esas
     funciones un perfil muestreado a lo largo de un rayo es indistinguible
     de un corte a lo largo del eje fijo de la caja, ambos son solo "un
@@ -373,7 +443,9 @@ def sky_map(
 
     for i_l in range(n_l):
         for i_b in range(n_b):
-            direction = direction_from_galactic(l_grid[i_l], b_grid[i_b], xp=xp)
+            e_l, e_b, direction = los_frame_from_galactic(
+                l_grid[i_l], b_grid[i_b], xp=xp
+            )
             perfiles = sample_fields_along_ray(
                 {"bx": bx, "by": by, "bz": bz, "ne": ne, "ne_rel": ne_rel},
                 observer_pos,
@@ -409,6 +481,7 @@ def sky_map(
                 perfiles_obs_al_final["bz"],
                 direction,
                 xp=xp,
+                basis=(e_l, e_b),
             )
 
             b_perp = los.perpendicular_field_magnitude(b1, b2, b_par, xp=xp)

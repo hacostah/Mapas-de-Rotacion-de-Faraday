@@ -109,7 +109,16 @@ def test_sky_map_disco_galactico_de_juguete_genera_png_de_inspeccion(tmp_path):
     ).mean()
     assert intensidad_plano > 5 * intensidad_polos
 
-    fig, ejes = plt.subplots(1, 2, figsize=(10, 4))
+    # Ángulo de polarización observado (mod pi), 0.5*atan2(U,Q): con la
+    # base tangente esférica de `los_frame_from_galactic` (la que usa
+    # `sky_map` desde el fix de continuidad) este mapa debe variar suave
+    # en (l, b); con la base arbitraria anterior habría mostrado una
+    # discontinuidad visible cerca de |b| ~ 81.4° (donde esa base cambiaba
+    # de vector de referencia). Se incluye aquí precisamente para dejar
+    # esa comprobación a la vista, no solo en un assert numérico.
+    psi_obs = 0.5 * np.arctan2(u_map, q_map)
+
+    fig, ejes = plt.subplots(1, 3, figsize=(14, 4))
     extent = [
         np.degrees(l_grid[0]),
         np.degrees(l_grid[-1]),
@@ -119,9 +128,10 @@ def test_sky_map_disco_galactico_de_juguete_genera_png_de_inspeccion(tmp_path):
     for ax, mapa, titulo, etiqueta, cmap in (
         (ejes[0], rm_map, "RM", "rad/m$^2$", "RdBu_r"),
         (ejes[1], i_map, "Intensidad sincrotrón", "u.a.", "inferno"),
+        (ejes[2], psi_obs, "Ángulo de polarización", "rad", "twilight"),
     ):
         im = ax.imshow(mapa.T, origin="lower", extent=extent, aspect="auto", cmap=cmap)
-        ax.set_title(f"{titulo} — disco de juguete, observador interior")
+        ax.set_title(f"{titulo}\ndisco de juguete, observador interior", fontsize=10)
         ax.set_xlabel("l [grados]")
         ax.set_ylabel("b [grados]")
         fig.colorbar(im, ax=ax, label=etiqueta)

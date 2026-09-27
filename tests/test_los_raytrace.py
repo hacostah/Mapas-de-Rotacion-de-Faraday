@@ -168,6 +168,41 @@ def test_project_field_to_los_frame_componente_paralela_es_producto_punto():
     assert np.allclose(b_par, esperado)
 
 
+def test_los_frame_from_galactic_es_ortonormal():
+    # (e_l, e_b, direction) debe ser una base ortonormal en cualquier
+    # punto (l, b), no solo en casos particulares -es lo mínimo para que
+    # tenga sentido usarla como "plano del cielo" perpendicular a la LOS.
+    rng = np.random.RandomState(5)
+    l = rng.uniform(-np.pi, np.pi, size=25)
+    b = rng.uniform(-np.pi / 2 * 0.95, np.pi / 2 * 0.95, size=25)
+
+    e_l, e_b, direction = lr.los_frame_from_galactic(l, b, xp=np)
+
+    assert np.allclose(np.sum(e_l * e_l, axis=0), 1.0)
+    assert np.allclose(np.sum(e_b * e_b, axis=0), 1.0)
+    assert np.allclose(np.sum(e_l * e_b, axis=0), 0.0, atol=1e-10)
+    assert np.allclose(np.sum(e_l * direction, axis=0), 0.0, atol=1e-10)
+    assert np.allclose(np.sum(e_b * direction, axis=0), 0.0, atol=1e-10)
+
+
+def test_los_frame_from_galactic_no_tiene_el_salto_de_la_base_arbitraria():
+    # `_base_perpendicular_al_rayo` (la base genérica, sin (l,b)) cambia
+    # de vector de referencia justo en |sin(b)| = 0.99 -un salto
+    # artificial de convención en esa latitud, no un efecto físico. La
+    # base tangente esférica no tiene ningún umbral de ese tipo: debe
+    # variar suavemente al cruzar exactamente esa misma latitud.
+    l = 0.3
+    b_umbral = np.arcsin(0.99)
+    paso = 1e-4
+
+    _, e_b_antes, _ = lr.los_frame_from_galactic(l, b_umbral - paso, xp=np)
+    _, e_b_despues, _ = lr.los_frame_from_galactic(l, b_umbral + paso, xp=np)
+
+    # Un cambio proporcional al paso (continuo) -no el salto de orden 1
+    # que produciría un cambio de vector de referencia.
+    assert np.linalg.norm(e_b_despues - e_b_antes) < 10 * paso
+
+
 def test_sky_map_rm_con_campo_en_x_mirando_hacia_l0_b0():
     # Prueba de regresión del bug real que motivó `project_field_to_los_
     # frame`: con un campo puramente a lo largo de x (bx=B0, by=bz=0) y
