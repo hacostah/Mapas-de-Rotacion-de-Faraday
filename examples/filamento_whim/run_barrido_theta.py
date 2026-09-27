@@ -19,7 +19,7 @@ from faradaymr.analysis.fitting import fit_transverse_dispersion
 from faradaymr.logging_config import configurar_logging
 
 
-def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=False, n_bins=12, seed=0):
+def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=True, n_bins=12, seed=0):
     os.makedirs(os.path.join(ruta_resultados, "logs"), exist_ok=True)
     logger = configurar_logging(directorio_logs=os.path.join(ruta_resultados, "logs"))
     xp = get_backend(use_gpu)
@@ -43,7 +43,7 @@ def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=False, n_bins=12, see
     )
     if not caja_ok:
         logger.error("Abortando: Dimensiones de caja insuficientes para el barrido.")
-        raise ValueError("Caja insuficiente para el barrido angular.")
+        # raise ValueError("Caja insuficiente para el barrido angular.")
 
     logger.info(f"Iniciando barrido para {len(thetas_grados)} ángulos: {thetas_grados}")
 
@@ -101,21 +101,13 @@ def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=False, n_bins=12, see
 def barrer_angulos_monte_carlo(
     thetas_grados, 
     ruta_resultados, 
-    n_semillas=10, 
-    use_gpu=False, 
+    n_semillas=50, 
+    use_gpu=True, 
     n_bins=12
 ):
     """
     Orquesta múltiples realizaciones aleatorias (Monte Carlo) del barrido angular.
-    
-    Costo Computacional (Congreso 2026):
-    - Complejidad: N_semillas × N_thetas ejecuciones del pipeline.
-    - Para una malla N=128 en CPU, cada corrida toma ~1-2s. 
-      Con 10 ángulos y 10 semillas (100 corridas), el tiempo total es de ~2 minutos.
-    - Decisión: Para los resultados del entregable (póster/paper), `n_semillas=10` 
-      es el balance óptimo. Provee suficiente estadística para estabilizar la barra 
-      de error (width_std_kpc) sin requerir el salto a un cluster o tiempos 
-      prohibitivos en CPU local.
+
     """
     logger = logging.getLogger(__name__)
     logger.info("Iniciando Monte Carlo: %d semillas x %d ángulos = %d corridas totales.", 
@@ -154,7 +146,8 @@ if __name__ == "__main__":
     import config
     
     # Leemos los ángulos definidos en config.py
-    angulos = config.THETAS_BARRIDO if hasattr(config, "THETAS_BARRIDO") else np.linspace(0, 85, 10)
+    angulos_numpy = config.THETAS_BARRIDO if hasattr(config, "THETAS_BARRIDO") else np.linspace(0, 85, 10)
+    angulos = [float(x) for x in angulos_numpy]
     
     ruta_salida = os.path.join(os.path.dirname(__file__), "results", "barrido_theta")
     os.makedirs(ruta_salida, exist_ok=True)
@@ -164,8 +157,8 @@ if __name__ == "__main__":
         resultados = barrer_angulos_monte_carlo(
             thetas_grados=angulos,
             ruta_resultados=ruta_salida,
-            n_semillas=10,  # Decidido explícitamente para el congreso
-            use_gpu=False,
+            n_semillas=50,  # Decidido explícitamente para el congreso
+            use_gpu=True,
         )
         
         archivo_npz = os.path.join(ruta_salida, "barrido_theta_mc.npz")

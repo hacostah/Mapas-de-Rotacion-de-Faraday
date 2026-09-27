@@ -3,6 +3,7 @@ scipy
 matplotlib
 astropy
 h5py
+pytest
 
 # Opcional: aceleración por GPU (requiere CUDA instalado).
 # cupy

@@ -52,6 +52,11 @@ def fit_transverse_dispersion(centros: np.ndarray, sigma_rm: np.ndarray, p0: tup
     GaussianFitResult
         Objeto con los parámetros ajustados, sus errores y la bondad del ajuste (R^2).
     """
+    if hasattr(centros, 'get'):
+        centros = centros.get()
+    if hasattr(sigma_rm, 'get'):
+        sigma_rm = sigma_rm.get()
+        
     centros = np.asarray(centros, dtype=float)
     sigma_rm = np.asarray(sigma_rm, dtype=float)
     

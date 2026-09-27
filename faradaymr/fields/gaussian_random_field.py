@@ -154,7 +154,7 @@ class GaussianRandomVectorField:
         for _ in range(3):
             fase = 2.0 * xp.pi * random.random((self.n, self.n, self.n))
             amplitud = random.rayleigh(1.0, (self.n, self.n, self.n))
-            potencial_vectorial.append(sigma_k * amplitud * xp.exp(1j * fase))
+            potencial_vectorial.append(xp.asarray(sigma_k) * xp.asarray(amplitud) * xp.exp(1j * xp.asarray(fase)))
         ax_k, ay_k, az_k = potencial_vectorial
 
         bx_k = 1j * (ky * az_k - kz * ay_k)
