@@ -104,3 +104,106 @@ def fit_transverse_dispersion(centros: np.ndarray, sigma_rm: np.ndarray, p0: tup
         width_err=float(errores[1]),
         r_squared=float(r_cuadrado),
     )
+
+
+def beta_dispersion_model(
+    d: np.ndarray | float, sigma0: float, r_c: float, p: float
+) -> np.ndarray | float:
+    """
+    Forma funcional alternativa a `gaussian_model`, derivada del propio
+    perfil beta de densidad usado para construir el filamento
+    (`ne(r) = n0 (1 + r^2/r_c^2)^(-3*beta/2)`, ver
+    `examples/filamento_whim/config_fisica.py`).
+
+    Para un cilindro con ese perfil, sigma_RM(d) ~ sqrt(integral ne^2 dl)
+    es también una potencia de (1 + d^2/r_c^2); a diferencia de la
+    gaussiana (que decae como exp(-d^2), mucho más rápido en las colas),
+    esta forma tiene colas que decaen como una ley de potencia, y en las
+    simulaciones de este proyecto ajusta sistemáticamente mejor (R^2 más
+    alto) que la gaussiana -ver `fit_beta_dispersion`.
+
+    Parámetros
+    ----------
+    d : distancia transversal al eje.
+    sigma0 : dispersión de RM en el eje (d=0).
+    r_c : escala característica de caída (análoga al radio de núcleo).
+    p : índice de la caída (libre; no se fija a 3*beta/2 - 1/4 a priori
+        para no imponer la hipótesis del perfil beta, solo inspirarse en
+        su forma funcional).
+    """
+    return sigma0 * (1.0 + (d**2) / (r_c**2)) ** (-p)
+
+
+@dataclass
+class BetaFitResult:
+    sigma0: float
+    r_c: float
+    p: float
+    sigma0_err: float
+    r_c_err: float
+    p_err: float
+    r_squared: float
+
+
+def fit_beta_dispersion(
+    centros: np.ndarray,
+    sigma_rm: np.ndarray,
+    p0: tuple[float, float, float] | None = None,
+) -> BetaFitResult:
+    """
+    Ajusta `beta_dispersion_model` a un perfil sigma_RM(d) ya calculado.
+    Misma interfaz y mismo tratamiento de NaNs que `fit_transverse_dispersion`,
+    para poder comparar directamente ambas formas funcionales (su R^2)
+    sobre el mismo perfil, en vez de asumir a ciegas cuál es la correcta.
+    """
+    if hasattr(centros, "get"):
+        centros = centros.get()
+    if hasattr(sigma_rm, "get"):
+        sigma_rm = sigma_rm.get()
+
+    centros = np.asarray(centros, dtype=float)
+    sigma_rm = np.asarray(sigma_rm, dtype=float)
+
+    valido = np.isfinite(sigma_rm)
+    if valido.sum() < 4:  # 3 parámetros libres: se piden al menos 4 puntos
+        raise ValueError(
+            "No hay suficientes bins válidos (no-NaN) para ajustar la forma beta. "
+            f"Se requieren al menos 4, pero se encontraron {valido.sum()}."
+        )
+
+    centros_v = centros[valido]
+    sigma_v = sigma_rm[valido]
+
+    if p0 is None:
+        distancias_positivas = np.abs(centros_v[centros_v != 0])
+        r_c_inicial = float(distancias_positivas.mean()) if distancias_positivas.size else 1.0
+        p0 = (float(np.max(sigma_v)), r_c_inicial, 1.0)
+
+    limites = (0.0, np.inf)
+
+    parametros, covarianza = curve_fit(
+        beta_dispersion_model,
+        centros_v,
+        sigma_v,
+        p0=p0,
+        bounds=limites,
+        maxfev=5000,
+    )
+
+    sigma0, r_c, p = parametros
+    errores = np.sqrt(np.diag(covarianza))
+
+    prediccion = beta_dispersion_model(centros_v, *parametros)
+    ss_res = np.sum((sigma_v - prediccion) ** 2)
+    ss_tot = np.sum((sigma_v - np.mean(sigma_v)) ** 2)
+    r_cuadrado = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    return BetaFitResult(
+        sigma0=float(sigma0),
+        r_c=float(r_c),
+        p=float(p),
+        sigma0_err=float(errores[0]),
+        r_c_err=float(errores[1]),
+        p_err=float(errores[2]),
+        r_squared=float(r_cuadrado),
+    )

@@ -70,7 +70,7 @@ def ejecutar_corrida_angular(
     return resultado.rm_map
 
 
-def generar_mapas_poster(use_gpu=True):
+def generar_mapas_poster(use_gpu=False):
     # Ángulos clave para visualización: Frente, Oblicuo, Lado
     angulos_grados = [0, 15, 30]
     angulos_rad = np.deg2rad(angulos_grados)

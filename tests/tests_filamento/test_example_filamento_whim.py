@@ -9,40 +9,69 @@ from examples.filamento_whim import config as cfg
 
 def test_simetria_cilindrica_escenario():
     """
-    Verifica que la densidad electrónica generada en el escenario
-    tenga simetría cilíndrica perfecta y respete el decaimiento radial.
+    Verifica que, DENTRO de su longitud finita, la densidad electrónica
+    del filamento tenga simetría cilíndrica (translación a lo largo del
+    eje) y respete el decaimiento radial; y que, MÁS ALLÁ de esa longitud,
+    la densidad esté fuertemente suprimida (el filamento es finito, no un
+    cilindro infinito -ver `construir_escenario` en `model.py`).
     """
     # Construimos el escenario forzando el eje Z (0, 0, 1) y usando NumPy (use_gpu=False)
     bx, by, bz, ne, ne_rel, r = construir_escenario(
-        n_spec=3.0, 
+        n_spec=3.0,
         b0_microgauss=0.01,
-        axis_direction=[0, 0, 1], # Filamento alineado en el eje Z
-        use_gpu=False 
+        axis_direction=[0, 0, 1],  # Filamento alineado en el eje Z
+        use_gpu=False,
     )
 
-    # Si el modelo es un cilindro a lo largo de Z, cualquier corte transversal (plano XY)
-    # a diferentes alturas de Z debe ser exactamente idéntico.
-    corte_z_inferior = ne[:, :, 0]
-    corte_z_medio = ne[:, :, ne.shape[2] // 2]
-    corte_z_superior = ne[:, :, -1]
+    n_base = cfg.N_BASE
+    eje_z = np.linspace(-n_base / 2, n_base / 2, n_base) * cfg.DX_BASE_KPC
+    media_longitud = cfg.LONGITUD_FILAMENTO_KPC / 2.0
 
-    # Validamos matemáticamente que las capas son iguales
+    # Dos posiciones bien DENTRO del tramo finito del filamento (a 0% y 40%
+    # de la media longitud): ahí sigue habiendo simetría de traslación.
+    idx_centro = int(np.argmin(np.abs(eje_z - 0.0)))
+    idx_dentro = int(np.argmin(np.abs(eje_z - 0.4 * media_longitud)))
+
+    corte_centro = ne[:, :, idx_centro]
+    corte_dentro = ne[:, :, idx_dentro]
+
     np.testing.assert_allclose(
-        corte_z_inferior, corte_z_superior, 
-        err_msg="Error: El perfil de densidad varía a lo largo del eje Z (no es un cilindro infinito)."
-    )
-    np.testing.assert_allclose(
-        corte_z_inferior, corte_z_medio, 
-        err_msg="Error: El centro del cilindro difiere de los extremos."
+        corte_centro,
+        corte_dentro,
+        rtol=1e-5,
+        err_msg=(
+            "Error: el perfil transversal varía entre dos puntos que deberían "
+            "estar ambos dentro del tramo finito del filamento."
+        ),
     )
 
-    # 3. Comprobamos la física del BetaModel: la densidad debe ser máxima en el centro 
-    # transversal (radio=0) y decrecer hacia los bordes[cite: 3].
+    # Simetría z -> -z: el corte en +0.4*media_longitud debe ser igual al de
+    # -0.4*media_longitud (la máscara axial depende solo de |proyección|).
+    idx_dentro_neg = int(np.argmin(np.abs(eje_z + 0.4 * media_longitud)))
+    np.testing.assert_allclose(
+        corte_dentro,
+        ne[:, :, idx_dentro_neg],
+        rtol=1e-5,
+        err_msg="Error: la máscara axial no es simétrica respecto al centro del filamento.",
+    )
+
+    # Solo tiene sentido pedir supresión en los bordes de la caja si la caja
+    # es más profunda que la longitud del filamento (si no, todo el eje
+    # z está dentro del filamento y no hay "afuera" que comprobar aquí).
+    if n_base * cfg.DX_BASE_KPC > cfg.LONGITUD_FILAMENTO_KPC:
+        corte_borde = ne[:, :, 0]  # extremo de la caja, bien más allá de la media longitud
+        assert corte_borde.max() < 1e-3 * corte_dentro.max(), (
+            "Error: la densidad no está suprimida más allá de la longitud finita "
+            "del filamento (¿se está simulando un cilindro infinito?)."
+        )
+
+    # Comprobamos la física del BetaModel: la densidad debe ser máxima en el centro
+    # transversal (radio=0) y decrecer hacia los bordes, dentro del tramo finito.
     centro_idx = ne.shape[0] // 2
-    densidad_centro = ne[centro_idx, centro_idx, 0]
-    densidad_borde = ne[0, 0, 0]
-    
-    assert densidad_centro > densidad_borde, "Error: La densidad no decae radialmente desde el núcleo."
+    densidad_centro = ne[centro_idx, centro_idx, idx_centro]
+    densidad_borde_transversal = ne[0, 0, idx_centro]
+
+    assert densidad_centro > densidad_borde_transversal, "Error: La densidad no decae radialmente desde el núcleo."
 
 def test_pipeline_filamento_corre_de_punta_a_punta_y_ajusta_gaussiana():
     from faradaymr import ObservationConfig, ObservationPipeline

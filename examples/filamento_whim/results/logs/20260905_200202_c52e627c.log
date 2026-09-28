@@ -1,7 +1,0 @@
-2026-09-05 20:02:02 [INFO] faradaymr: Inicia la simulación 20260905_200202_c52e627c (log en /mnt/c/users/user/Desktop/ProyectoCNF2026/Mapas-de-Rotacion-de-Faraday/tests/../examples/filamento_whim/results/logs/20260905_200202_c52e627c.log)
-2026-09-05 20:02:02 [INFO] faradaymr: Corrida 20260905_200202_c52e627c: theta=0.0° (eje del filamento=[0.0, 0.0, 1.0]), n_spec=3, B0=1 uG
-2026-09-05 20:02:02 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0155 s
-2026-09-05 20:02:02 [INFO] faradaymr.pipeline: Integrando línea de visión (RM, I, Q, U)...
-2026-09-05 20:02:03 [INFO] faradaymr.pipeline: Kernel 'ObservationPipeline.run' terminó en 0.0134 s
-2026-09-05 20:02:03 [INFO] faradaymr.io: Mapas guardados en /tmp/pytest-of-drivera/pytest-1/test_barrido_angular_produce_o0/theta_000.0deg (.npy, 4 arreglos).
-2026-09-05 20:02:03 [INFO] faradaymr: Corrida 20260905_200202_c52e627c completa (sigma_RM=39.2). Resultados en: /tmp/pytest-of-drivera/pytest-1/test_barrido_angular_produce_o0/theta_000.0deg

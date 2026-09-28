@@ -34,6 +34,38 @@ def cylindrical_radius(xx, yy, zz, axis_direction, xp=None):
     # La distancia cilíndrica es la norma del vector perpendicular
     return xp.linalg.norm(perp, axis=-1)
 
+def axial_projection(xx, yy, zz, axis_direction, xp=None):
+    """
+    Proyección (con signo) de cada punto de la malla sobre el eje del
+    filamento -la coordenada "a lo largo" del filamento, complementaria a
+    `cylindrical_radius` (la coordenada "perpendicular" al filamento).
+
+    Se usa para truncar axialmente un filamento de longitud finita: un
+    punto pertenece al filamento si `abs(axial_projection(...)) <= L/2`,
+    donde L es la extensión física total del objeto (`LONGITUD_FILAMENTO`
+    en `examples/filamento_whim/config_fisica.py`).
+
+    Parámetros
+    -----------
+    xx, yy, zz : array_like
+        Mallas de coordenadas 3D.
+    axis_direction : list o array_like
+        Vector de dirección del eje del filamento.
+    xp : module, opcional
+        Módulo de array (numpy o cupy).
+    """
+    if xp is None:
+        try:
+            import cupy as xp
+        except ImportError:
+            import numpy as xp
+
+    pos = xp.stack([xx, yy, zz], axis=-1)
+    eje = xp.asarray(axis_direction, dtype=float)
+    eje = eje / xp.linalg.norm(eje)
+    return xp.tensordot(pos, eje, axes=([-1], [0]))
+
+
 def filament_axis_from_viewing_angle(theta_rad):
     """
     Vector unitario del eje del filamento para un ángulo de vista theta_rad

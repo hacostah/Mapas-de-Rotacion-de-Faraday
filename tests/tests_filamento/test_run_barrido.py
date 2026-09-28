@@ -59,6 +59,9 @@ def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
             "width_kpc": np.array([10.0, 20.0]) + desplazamiento,
             "width_err_kpc": np.array([1.0, 1.0]),  # No se usa en la agregación
             "sigma0": np.array([5.0, 5.0]) + (seed - 1) * 1.0,
+            "r_squared_gauss": np.array([0.9, 0.9]),
+            "rc_beta_kpc": np.array([9.0, 19.0]) + desplazamiento,
+            "r_squared_beta": np.array([0.98, 0.98]),
         }
     
     mock_barrer.side_effect = mock_side_effect
@@ -86,3 +89,7 @@ def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
     assert np.all(resultados["width_std_kpc"] > 0)
     assert np.all(resultados["sigma0_std"] > 0)
     assert resultados["width_medio_kpc"].shape == (2,)
+
+    # La agregación de la forma beta debe seguir la misma lógica que la gaussiana.
+    np.testing.assert_array_equal(resultados["rc_beta_medio_kpc"], [9.0, 19.0])
+    assert np.all(resultados["r_squared_beta_medio"] > resultados["r_squared_gauss_medio"] - 1e-9)
