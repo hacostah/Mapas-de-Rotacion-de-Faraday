@@ -1,3 +1,6 @@
+from ..backend import backend_de
+
+
 def cylindrical_radius(xx, yy, zz, axis_direction, xp=None):
     """
     Calcula la distancia perpendicular de cada punto en la malla 
@@ -13,10 +16,7 @@ def cylindrical_radius(xx, yy, zz, axis_direction, xp=None):
         Módulo de array (numpy o cupy). Si es None, intenta inferirlo.
     """
     if xp is None:
-        try:
-            import cupy as xp
-        except ImportError:
-            import numpy as xp
+        xp = backend_de(xx, yy, zz)
 
     # Apilar las coordenadas en un solo arreglo vectorial
     pos = xp.stack([xx, yy, zz], axis=-1)
@@ -55,10 +55,7 @@ def axial_projection(xx, yy, zz, axis_direction, xp=None):
         Módulo de array (numpy o cupy).
     """
     if xp is None:
-        try:
-            import cupy as xp
-        except ImportError:
-            import numpy as xp
+        xp = backend_de(xx, yy, zz)
 
     pos = xp.stack([xx, yy, zz], axis=-1)
     eje = xp.asarray(axis_direction, dtype=float)
@@ -121,10 +118,7 @@ def sky_footprint_mask(ne, umbral_relativo=1e-3, axis=-1, xp=None):
     mascara : ndarray 2D de booleanos, con la forma de `ne` sin el eje LOS.
     """
     if xp is None:
-        try:
-            import cupy as xp
-        except ImportError:
-            import numpy as xp
+        xp = backend_de(ne)
 
     pico = xp.max(ne)
     if pico <= 0:
@@ -238,10 +232,7 @@ def projected_axis_distance(shape, filament_axis_3d, pixel_size, xp=None):
         centro del mapa con la dirección proyectada del filamento.
     """
     if xp is None:
-        try:
-            import cupy as xp
-        except ImportError:
-            import numpy as xp
+        import numpy as xp
 
     nx, ny = shape
     x = (xp.arange(nx) - nx // 2) * pixel_size

@@ -166,3 +166,34 @@ def test_rm_acumulada_del_pipeline_usa_dl_en_pc():
     # Q/U escalan linealmente con pixel_size (dl de emisión) y nada más.
     np.testing.assert_allclose(r1.q_map * 1000.0, r2.q_map, rtol=1e-6)
     np.testing.assert_allclose(r1.u_map * 1000.0, r2.u_map, rtol=1e-6)
+
+
+def test_funciones_con_xp_none_no_usan_cupy_para_arreglos_numpy(monkeypatch):
+    """Con cupy instalado (p.ej. Colab), pasar arreglos numpy con xp=None debe usar numpy."""
+    import numpy as np
+    import types
+    from faradaymr import backend
+    from faradaymr.simulation.geometry import sky_footprint_mask, cylindrical_radius
+    from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
+
+    import sys
+    falso_cupy = types.ModuleType("cupy")
+    falso_cupy.ndarray = type("ArregloGPUFalso", (), {})
+
+    def _no_numpy(nombre):  # cualquier función de "cupy" rechaza arreglos numpy
+        def f(*a, **k):
+            raise TypeError("'a' must be a cupy.ndarray object")
+        return f
+
+    falso_cupy.__getattr__ = _no_numpy
+    monkeypatch.setitem(sys.modules, "cupy", falso_cupy)
+    monkeypatch.setattr(backend, "_cp", falso_cupy)
+    monkeypatch.setattr(backend, "HAS_GPU", True)
+
+    ne = np.random.RandomState(0).rand(6, 6, 6)
+    assert isinstance(sky_footprint_mask(ne), np.ndarray)
+    x = np.arange(4.0)
+    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
+    assert isinstance(cylindrical_radius(xx, yy, zz, [0, 0, 1]), np.ndarray)
+    centros, valores = transverse_rm_dispersion(ne[..., 0], [1, 0, 0], 1.0, np.linspace(0, 3, 4))
+    assert isinstance(valores, np.ndarray)

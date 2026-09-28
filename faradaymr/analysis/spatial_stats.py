@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from scipy.stats import binned_statistic
 
-from ..backend import to_numpy
+from ..backend import backend_de, to_numpy
 from ..simulation.geometry import projected_axis_distance
 
 def radial_profile(map2d, distance_map, bins, statistic="std", mascara=None, xp=None):
@@ -94,10 +94,7 @@ def transverse_rm_dispersion(
     vez con `sky_footprint_mask(ne)` y la pasa aquí.
     """
     if xp is None:
-        try:
-            import cupy as xp
-        except ImportError:
-            import numpy as xp
+        xp = backend_de(rm_map)
 
     distance_map = projected_axis_distance(
         rm_map.shape, filament_axis_3d, pixel_size, xp=xp
