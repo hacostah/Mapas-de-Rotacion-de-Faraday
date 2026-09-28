@@ -426,6 +426,16 @@ def generar_graficos_estructura(
 
     Devuelve la lista de rutas de archivo generadas.
     """
+    # `run.py` llama a esta función ANTES de `faradaymr.io.save_maps` (que
+    # es lo que normalmente crea `ruta_destino`) -en una copia nueva del
+    # repo (p.ej. recién clonada en Colab, ver `Faraday_MR_Colab.ipynb`),
+    # `results/foreground_galactico/` todavía no existe en ese punto, y
+    # `fig.savefig` no crea directorios por sí solo: sin este
+    # `os.makedirs`, la primera figura de este módulo fallaba con
+    # `FileNotFoundError` (visto en una corrida real en Colab). Mismo
+    # patrón defensivo que ya usan `faradaymr.io.save_maps`/`save_fits`.
+    os.makedirs(ruta_destino, exist_ok=True)
+
     observer_pos_gc = np.asarray(observer_pos) - box_size / 2.0
 
     rutas = [
