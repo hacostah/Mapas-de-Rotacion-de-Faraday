@@ -12,7 +12,7 @@ from faradaymr.analysis.fitting import (
 from faradaymr.simulation.geometry import filament_axis_from_viewing_angle
 from examples.filamento_whim import config_fisica
 from examples.filamento_whim.model import construir_escenario
-from faradaymr.simulation.geometry import sky_footprint_mask
+from faradaymr.simulation.geometry import sky_footprint_mask, filament_body_mask
 
 # Rutas de los datos generados por run.py y run_barrido_theta.py
 BASE_DIR = os.path.dirname(__file__)
@@ -112,7 +112,10 @@ def fig2_perfil_transversal_con_ajuste():
         rng=np.random.RandomState(42),
         longitud_filamento_kpc=config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc),
     )
-    footprint = sky_footprint_mask(ne)
+    footprint = sky_footprint_mask(ne) & filament_body_mask(
+        rm_map.shape, axis_dir, dx_kpc,
+        config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc), config_fisica.RC.to_value(u.kpc),
+    )
 
     # Ventana de ajuste FIJA (igual que run_barrido_theta.py), no "hasta la
     # mitad de la caja": así esta figura es comparable con la Fig. 3. El

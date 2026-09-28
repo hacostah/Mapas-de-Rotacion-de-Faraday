@@ -132,3 +132,37 @@ def test_sky_footprint_mask_todo_cero_no_lanza_error():
     mascara = sky_footprint_mask(ne)
     assert mascara.shape == (3, 3)
     assert not np.any(mascara)
+
+def test_filament_body_mask_limites_fisicos():
+    import numpy as np
+    from faradaymr.simulation.geometry import filament_body_mask
+    # De lado (theta=90°): se conserva toda la longitud proyectada L/2.
+    m = filament_body_mask((101, 101), [1.0, 0.0, 0.0], 10.0, longitud=600.0, r_core=100.0, xp=np)
+    x = (np.arange(101) - 50) * 10.0
+    assert m[np.abs(x) <= 300.0, :].all() and not m[np.abs(x) > 300.0, :].any()
+    # De frente (theta=0°): la proyección es un punto -> todo el mapa.
+    assert filament_body_mask((11, 11), [0.0, 0.0, 1.0], 10.0, 600.0, 100.0, xp=np).all()
+    # Inclinado: |u| <= L sin/2 - r_c cos, siempre más angosto que la huella L sin/2.
+    t = np.deg2rad(45.0)
+    m45 = filament_body_mask((201, 201), [np.sin(t), 0.0, np.cos(t)], 10.0, 2000.0, 300.0, xp=np)
+    x = (np.arange(201) - 100) * 10.0
+    limite = 2000.0 * np.sin(t) / 2 - 300.0 * np.cos(t)
+    assert m45[np.abs(x) <= limite].all() and not m45[np.abs(x) > limite].any()
+
+
+def test_rm_acumulada_del_pipeline_usa_dl_en_pc():
+    """La rotación de Faraday interna (Q/U) debe usar el mismo dl en pc que el mapa de RM."""
+    import numpy as np
+    from faradaymr import ObservationConfig, ObservationPipeline
+    rng = np.random.RandomState(0)
+    n = 8
+    bx, by, bz = (rng.normal(size=(n, n, n)) for _ in range(3))
+    ne = np.full((n, n, n), 1e-3)
+    cfg = ObservationConfig(pixel_size=20.0, dl=20000.0, frequency=1.4e9, wavelength=0.214, p_index=3.0)
+    r1 = ObservationPipeline(config=cfg).run(bx, by, bz, ne, ne)
+    # Con dl=pixel_size en pc la RM acumulada sería idéntica: Q/U no deben depender de pixel_size vía RM.
+    cfg2 = ObservationConfig(pixel_size=20000.0, dl=20000.0, frequency=1.4e9, wavelength=0.214, p_index=3.0)
+    r2 = ObservationPipeline(config=cfg2).run(bx, by, bz, ne, ne)
+    # Q/U escalan linealmente con pixel_size (dl de emisión) y nada más.
+    np.testing.assert_allclose(r1.q_map * 1000.0, r2.q_map, rtol=1e-6)
+    np.testing.assert_allclose(r1.u_map * 1000.0, r2.u_map, rtol=1e-6)

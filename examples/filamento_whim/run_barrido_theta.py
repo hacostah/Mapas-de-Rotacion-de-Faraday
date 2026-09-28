@@ -14,7 +14,7 @@ from examples.filamento_whim.validacion import verificar_caja_suficiente
 # Importaciones del framework faradaymr
 from faradaymr import ObservationConfig, ObservationPipeline, get_backend
 from faradaymr.fields import GaussianRandomVectorField
-from faradaymr.simulation.geometry import sky_footprint_mask
+from faradaymr.simulation.geometry import sky_footprint_mask, filament_body_mask
 from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
 from faradaymr.analysis.fitting import (
     fit_transverse_dispersion,
@@ -164,7 +164,10 @@ def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=True, n_bins=None, se
         # distancia transversal y diluyen el sigma_RM medido -tanto más
         # cuanto más corta es la huella proyectada (peor a theta chico). Ver
         # `faradaymr.simulation.geometry.sky_footprint_mask`.
-        footprint = sky_footprint_mask(ne, xp=xp)
+        footprint = sky_footprint_mask(ne, xp=xp) & filament_body_mask(
+            resultado.rm_map.shape, axis_direction, dx_base_kpc,
+            longitud_filamento_kpc, config_fisica.RC.to_value(u.kpc), xp=xp,
+        )
 
         # 5. Análisis de dispersión transversal (ventana fija, ver arriba)
         bordes = np.linspace(0.0, distancia_max, n_bins)

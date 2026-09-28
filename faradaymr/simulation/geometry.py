@@ -134,6 +134,50 @@ def sky_footprint_mask(ne, umbral_relativo=1e-3, axis=-1, xp=None):
     return xp.any(ne > umbral, axis=axis)
 
 
+def filament_body_mask(shape, filament_axis_3d, pixel_size, longitud, r_core, xp=None):
+    """
+    Máscara 2D: True en los píxeles cuya línea de visión cruza el núcleo del
+    filamento COMPLETO dentro de su longitud finita (el "cuerpo"), excluyendo
+    las regiones de las puntas.
+
+    Por qué hace falta (además de `sky_footprint_mask`): con un perfil beta
+    de caída lenta (beta=0.5, n ~ r^-1.5) la huella por umbral de densidad
+    cubre prácticamente todo el mapa para theta <= 60°, así que no excluye
+    nada. Los píxeles más allá de las puntas proyectadas tienen una
+    sigma_RM mucho menor y, al mezclarse en los bins de distancia
+    transversal, diluyen sigma0 justo en la cantidad que depende de theta.
+
+    Derivación: con el eje a = (sin t, 0, cos t) y la LoS a lo largo de z,
+    la LoS del píxel con coordenada u a lo largo del eje proyectado pasa lo
+    más cerca del eje en la posición axial s* = u / sin t, y cruza el núcleo
+    (|r| <= r_c) en un tramo axial de +/- r_c * cot t alrededor de s*. Para
+    que ese cruce quede entero dentro de |s| <= L/2:
+        |u| <= L sin(t)/2 - r_c cos(t).
+    A t=90° es |u| <= L/2 (toda la longitud). Cerca de la vista de frente
+    (tan t < 2 r_c / L) ningún píxel cumple la condición; ahí se usa la
+    mitad central de la huella proyectada, |u| <= L sin(t)/4. A t=0 la
+    proyección es un punto y la máscara es todo el mapa (distancia radial).
+    """
+    if xp is None:
+        import numpy as xp
+    nx, ny = shape
+    x = (xp.arange(nx) - nx // 2) * pixel_size
+    y = (xp.arange(ny) - ny // 2) * pixel_size
+    xx, yy = xp.meshgrid(x, y, indexing="ij")
+    eje = xp.asarray(filament_axis_3d, dtype=float)
+    eje = eje / xp.linalg.norm(eje)
+    sin_t = float(xp.hypot(eje[0], eje[1]))
+    if sin_t < 1e-12:
+        return xp.ones(shape, dtype=bool)
+    cos_t = abs(float(eje[2]))
+    u = (xx * eje[0] + yy * eje[1]) / sin_t
+    # Para ángulos casi de frente (ninguna LoS completa el cruce del
+    # núcleo) se conserva la mitad central de la huella proyectada, donde
+    # la LoS recorre el cuerpo del filamento, no sus extremos.
+    limite = max(longitud * sin_t / 2.0 - r_core * cos_t, longitud * sin_t / 4.0, pixel_size)
+    return xp.abs(u) <= limite
+
+
 def filament_axis_from_viewing_angle(theta_rad):
     """
     Vector unitario del eje del filamento para un ángulo de vista theta_rad
