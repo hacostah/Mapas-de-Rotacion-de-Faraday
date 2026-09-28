@@ -1,90 +1,3 @@
-"""
-Ray tracing con observador interior a la caja (Proyecto III: Vía Láctea).
-
-`faradaymr.los` integra siempre a lo largo de un eje fijo de la malla
-(`axis=-1`): eso equivale a un observador infinitamente lejos, mirando la
-caja de frente, con todas las líneas de visión paralelas entre sí. Es
-correcto para el ICM o un halo galáctico visto desde fuera (Proyectos I y
-II), pero no para la Vía Láctea: el Sol está *dentro* del disco, así que
-cada dirección de observación (l, b) atraviesa la caja en un ángulo propio,
-con un punto de partida común (la posición del observador) y una longitud
-de camino distinta para cada (l, b) -no hay un único eje de la malla que
-sirva de línea de visión para todas las direcciones a la vez.
-
-Lo que cambia respecto a `los.py` es *cómo se muestrea la malla a lo largo
-del rayo*, no la física de las integrales: una vez que se tiene un perfil
-1D de bx, by, bz, ne (y n_rel) muestreado a lo largo de un rayo cualquiera,
-`rotation_measure`, `rotation_measure_cumulative`, `stokes_qu`, etc. de
-`los.py` se aplican exactamente igual, con `axis=-1` sobre ese perfil -para
-esas funciones, "la línea de visión" siempre fue solo "el último eje del
-arreglo que se les pasa", sin importar si ese eje es el z fijo de la caja o
-un conjunto de puntos muestreados a lo largo de un rayo con dirección
-arbitraria.
-
-Deliberadamente NO se implementa un trazador de rayos genérico con
-refinamiento adaptativo ni octrees: para un primer modelo de juguete sobre
-una malla cartesiana regular alcanza con (1) encontrar dónde sale cada rayo
-de la caja mediante álgebra cerrada (intersección rayo-caja tipo "slab",
-una sola evaluación por rayo, no una subdivisión espacial), y (2) muestrear
-el campo en puntos equiespaciados `dl` a lo largo de ese rayo, interpolando
-trilinealmente con `scipy.ndimage.map_coordinates`.
-
-Convención de ejes y unidades:
-- `observer_pos`, `direction` y las coordenadas de cada rayo están en las
-  mismas unidades físicas que `dx` (el tamaño de celda de la malla, p.ej.
-  kpc); dividir entre `dx` es lo que las convierte en índices fraccionarios
-  de arreglo que entiende `map_coordinates`.
-- Los arreglos 3D (bx, by, bz, ne, ...) deben tener sus tres ejes en el
-  mismo orden (x, y, z) que las componentes de `observer_pos`/`direction`
-  -la misma convención que ya usa `fields.GaussianRandomVectorField`
-  (`meshgrid(..., indexing="ij")`).
-- La caja ocupa `[0, box_size]` en cada eje (un origen fijo en una esquina,
-  no en el centro); si el observador va cerca del centro de la caja, hay
-  que pasar `observer_pos` explícitamente desplazado, no se asume nada.
-- Los perfiles muestreados quedan ordenados con el observador en el
-  *primer* punto (índice 0) y el borde de la caja en el último -el orden
-  natural de "parado en el observador, mirando hacia (l, b)". Como
-  `rotation_measure_cumulative`/`stokes_qu` de `los.py` esperan la
-  convención opuesta (observador en el *último* índice: así definieron
-  "acumulado desde cada punto hasta el borde final de la línea de
-  visión"), este módulo invierte el perfil una sola vez, justo después de
-  muestrear, antes de llamar a esas funciones -ver `sky_map`.
-
-Un punto que NO es solo cambiar el eje de integración: en `los.py`, "bz" no
-es "la componente z del campo" en abstracto, es *la componente paralela a
-la línea de visión*, y eso solo coincide con bz porque ahí la LOS siempre
-es el eje z fijo de la caja. Con un observador interior la LOS es la
-dirección (l, b), que para una línea de visión en el plano galáctico
-(b≈0) casi no tiene componente z -usar bz directamente ahí sería casi
-siempre cero, sin que eso signifique que no hay señal física. Por eso,
-antes de llamar a `los.perpendicular_field_magnitude`/
-`rotation_measure`/`stokes_qu`, `sky_map` reexpresa el campo muestreado
-(bx, by, bz de la caja) en el marco local de cada rayo -dos ejes en el
-plano del cielo perpendicular al rayo, y uno a lo largo de él- con
-`project_field_to_los_frame`. Esa proyección es la única parte nueva; las
-funciones de `los.py` en sí no cambian, solo dejan de recibir bz "crudo" y
-reciben la componente ya proyectada a lo largo de la LOS que de verdad les
-corresponde en su firma.
-
-Elección de los dos ejes del "plano del cielo" (e1, e2) perpendiculares a
-la LOS: para RM e I (que no dependen de ángulo, solo de magnitudes) esa
-elección es irrelevante. Pero para `psi_0`/Q/U sí importa *qué* dirección
-del plano del cielo se llama "ángulo cero": una base construida de forma
-arbitraria por rayo (`_base_perpendicular_al_rayo`, un producto cruz con
-un vector de referencia fijo) no varía suavemente de un píxel (l, b) al
-vecino, y además tiene un salto explícito de convención cerca de los
-polos (donde cambia el vector de referencia para no dividir por un
-producto cruz casi nulo). `sky_map` usa en cambio `los_frame_from_galactic`,
-la base tangente estándar de la esfera en (l, b) -(e_l, e_b), las
-direcciones de longitud y latitud crecientes- que varía suavemente en
-(l, b) en todas partes salvo en el polo mismo (una singularidad de
-coordenadas inherente a usar (l, b) en absoluto, no un defecto de esta
-implementación). `_base_perpendicular_al_rayo` se conserva como utilidad
-genérica (y como valor por defecto de `project_field_to_los_frame`) para
-quien muestree a lo largo de una `direction` que no venga de una grilla
-(l, b), donde no hay una base "natural" con la que compararla.
-"""
-
 from __future__ import annotations
 
 import math
@@ -108,7 +21,15 @@ def _map_coordinates_callable(xp):
 
 
 def sample_line_of_sight(
-    field_3d, observer_pos, direction, n_samples, dl, dx, xp=None, mode="nearest"
+    field_3d,
+    observer_pos,
+    direction,
+    n_samples,
+    dl,
+    dx,
+    xp=None,
+    mode="nearest",
+    offset=0.5,
 ):
     """
     Muestrea `field_3d` en `n_samples` puntos equiespaciados `dl` aparte,
@@ -137,6 +58,20 @@ def sample_line_of_sight(
         ejes: malla cúbica uniforme). Es lo que convierte una posición
         física en el índice fraccionario de arreglo que necesita
         `map_coordinates`.
+    offset : float
+        En qué fracción de `dl`, dentro de cada celda, se toma la
+        muestra: el punto n se ubica en `(n + offset) * dl`. Por defecto
+        0.5 (punto medio de la celda), no 0.0 (borde izquierdo): muestrear
+        en el borde izquierdo pone la primera muestra exactamente en
+        `observer_pos` con peso completo, lo que introduce un sesgo O(dl)
+        en cualquier integral acumulada que dependa de *dónde dentro de
+        la celda* se originó la contribución (el caso más notorio es el
+        ángulo de polarización rotado por Faraday, ver
+        `_sky_map_chunk`/punto 5b de `errores_faradaymr_vs_hammurabix.md`
+        -verificado: baja el sesgo angular de 8-15° a <0.4° con
+        dl=0.1 kpc). `offset=0.0` recupera el muestreo en el borde
+        izquierdo (comportamiento histórico), por si algún llamador
+        necesita esa convención en particular.
     mode : str
         Política de `map_coordinates` fuera de los bordes del arreglo.
         "nearest" (por defecto) satura al valor de la celda de borde más
@@ -149,15 +84,16 @@ def sample_line_of_sight(
     Devuelve
     --------
     ndarray (n_samples,): el perfil 1D interpolado, con el índice 0 en
-    `observer_pos` y el índice n_samples-1 en el punto más lejano del rayo
-    (ver nota de convención de ejes en el docstring del módulo).
+    `(observer_pos + offset*dl*direction)` y el índice n_samples-1 en el
+    punto más lejano del rayo (ver nota de convención de ejes en el
+    docstring del módulo).
     """
     if xp is None:
         import numpy as xp
     observer_pos = xp.asarray(observer_pos, dtype=float)
     direction = xp.asarray(direction, dtype=float)
 
-    pasos = xp.arange(n_samples) * dl
+    pasos = (xp.arange(n_samples) + offset) * dl
     puntos = observer_pos[:, None] + xp.outer(direction, pasos)
     coords_malla = puntos / dx
 
@@ -220,9 +156,7 @@ def los_frame_from_galactic(l, b, xp=None):
     direction = direction_from_galactic(l, b, xp=xp)
     cero = xp.zeros_like(l)
     e_l = xp.stack([-xp.sin(l), xp.cos(l), cero], axis=0)
-    e_b = xp.stack(
-        [-xp.sin(b) * xp.cos(l), -xp.sin(b) * xp.sin(l), xp.cos(b)], axis=0
-    )
+    e_b = xp.stack([-xp.sin(b) * xp.cos(l), -xp.sin(b) * xp.sin(l), xp.cos(b)], axis=0)
     return e_l, e_b, direction
 
 
@@ -366,6 +300,7 @@ def sample_fields_along_ray(
     margin=1e-6,
     xp=None,
     mode="nearest",
+    offset=0.5,
 ):
     """
     Muestrea varios campos 3D (típicamente bx, by, bz, ne, n_rel) a lo
@@ -397,7 +332,15 @@ def sample_fields_along_ray(
     n_samples = max(1, int(math.floor((t_salida * (1.0 - margin)) / dl)))
     return {
         nombre: sample_line_of_sight(
-            campo, observer_pos, direction, n_samples, dl, dx, xp=xp, mode=mode
+            campo,
+            observer_pos,
+            direction,
+            n_samples,
+            dl,
+            dx,
+            xp=xp,
+            mode=mode,
+            offset=offset,
         )
         for nombre, campo in fields.items()
     }
@@ -447,18 +390,28 @@ def _sky_map_chunk(
 
     e_l, e_b, direction = los_frame_from_galactic(l_chunk, b_chunk, xp=xp)  # (3, n_pix)
 
-    t_salida = ray_box_exit_distance(observer_pos, direction, box_size, xp=xp)  # (n_pix,)
+    t_salida = ray_box_exit_distance(
+        observer_pos, direction, box_size, xp=xp
+    )  # (n_pix,)
     n_samples_por_rayo = xp.maximum(
         1, xp.floor(t_salida * (1.0 - margin) / dl).astype(xp.int64)
     )
     n_max = int(to_numpy(n_samples_por_rayo).max())
 
-    pasos = xp.arange(n_max) * dl  # (n_max,)
+    # Muestreo en el punto medio de cada celda, (i+1/2)*dl, no en el borde
+    # izquierdo i*dl (punto 5b del informe de errores): con muestreo en el
+    # borde izquierdo, la primera muestra cae exactamente en
+    # `observer_pos` con peso completo, lo que introduce un sesgo O(dl) en
+    # el ángulo de polarización acumulado (ver la corrección de punto
+    # medio aplicada más abajo a `rm_cumulative`). `n_samples_por_rayo` ya
+    # es un límite conservador (floor con margen) calculado sobre i*dl,
+    # así que la última muestra en (n-1/2)*dl queda con más margen todavía
+    # dentro de la caja, nunca más afuera.
+    pasos = (xp.arange(n_max) + 0.5) * dl  # (n_max,)
     # puntos: (3, n_pix, n_max) = observer_pos + direction * pasos, para
     # todos los píxeles y todas las muestras del lote a la vez.
     puntos = (
-        observer_pos.reshape(3, 1, 1)
-        + direction[:, :, None] * pasos[None, None, :]
+        observer_pos.reshape(3, 1, 1) + direction[:, :, None] * pasos[None, None, :]
     )
     coords = (puntos / dx).reshape(3, n_pix * n_max)
 
@@ -506,20 +459,71 @@ def _sky_map_chunk(
         basis=(e_l[:, :, None], e_b[:, :, None]),
     )
 
+    # Corrección de convención de signo (ver docstring del módulo y
+    # `errores_faradaymr_vs_hammurabix.md`, punto 1, "Causa A"): `b_par`
+    # tal como sale de `project_field_to_los_frame` es `direction · B`,
+    # que apunta *hacia afuera* del observador (en el sentido en que se
+    # recorre el rayo, de la posición del observador hacia la caja). La
+    # convención estándar de RM (y la que usa hammurabiX en su
+    # `fd_forefactor` negativo) es B_parallel > 0 cuando el campo apunta
+    # *hacia* el observador, es decir, en la dirección opuesta a
+    # `direction`. Se invierte el signo una sola vez, aquí, antes de que
+    # `b_par` se use en cualquier integral -tanto para RM como para la
+    # rotación de Faraday de Q/U comparten el mismo `b_par`, así que
+    # ambas quedan corregidas con este solo cambio.
+    #
+    # Esto NO afecta a `b_perp` (y por lo tanto tampoco a j_nu/I): B_perp
+    # = |B|*sin(alpha) con alpha = arctan2(b_perp, b_parallel) es
+    # invariante ante b_parallel -> -b_parallel (sin(pi - alpha) =
+    # sin(alpha)), que es exactamente lo que se veía al comparar contra
+    # hammurabiX: I y |P| ya coincidían, solo los signos de RM/Q/U no.
+    b_par = -b_par
+
     b_perp = los.perpendicular_field_magnitude(b1, b2, b_par, xp=xp)
     j_nu = los.synchrotron_emissivity(b_perp, pne_rel, frequency, p_index, xp=xp)
     i_chunk = los.synchrotron_intensity(j_nu, dl, axis=-1, xp=xp)
 
-    psi_0 = los.polarization_angle_intrinsic(b1, b2, xp=xp)
+    # Convención del ángulo de polarización intrínseco (punto 1, "Causa
+    # B"): `los.polarization_angle_intrinsic(bx, by) = arctan2(bx, -by)`
+    # mide el ángulo desde el primer argumento hacia el segundo. Llamarla
+    # con (b1, b2) = (e_l, e_b) -el orden "natural" de la base- mide el
+    # ángulo desde e_l hacia e_b, que NO es la convención IAU (medida
+    # desde el Norte -e_b- hacia el Este -e_l-). Invertir el orden de los
+    # argumentos, psi_0 = polarization_angle_intrinsic(b2, b1) =
+    # arctan2(e_b·B, -e_l·B), reproduce exactamente la fórmula de
+    # hammurabiX (`sync_ipa`: atan2(-theta_hat·B, -phi_hat·B), con
+    # e_b = -theta_hat y e_l = phi_hat) -verificado numéricamente contra
+    # hammurabiX a ~1e-13 (ver informe de errores, punto 1).
+    psi_0 = los.polarization_angle_intrinsic(b2, b1, xp=xp)
     # La geometría (posición de las muestras, alcance del rayo) va en las
     # unidades de la caja (`dl`, p.ej. kpc), pero la constante 0.812 de
     # `los.rotation_measure*` solo vale con dl en pc: se convierte aquí,
     # solo para RM. `j_nu` (u.a.) no depende de esta unidad.
     dl_pc = dl * length_unit_pc
     rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl_pc, axis=-1, xp=xp)
+    # Corrección de punto medio (punto 5b del informe de errores): con
+    # las muestras tomadas en el punto medio de cada celda (ver
+    # `_sky_map_chunk` más arriba, `pasos = (arange(n_max)+0.5)*dl`),
+    # `rm_cumulative` tal como la calcula `los.rotation_measure_cumulative`
+    # incluye la celda propia COMPLETA en la rotación acumulada "desde
+    # este punto hasta el observador". Pero la emisión de esa celda nace
+    # justo en su punto medio, así que la luz solo atraviesa la MITAD de
+    # esa celda antes de salir de ella rumbo al observador: usar la celda
+    # completa sobre-rota el ángulo en esa celda por un factor de dos.
+    # Restar la mitad de la contribución de la celda propia corrige ese
+    # sesgo (verificado: baja el sesgo angular de 8-15° a <0.4° con
+    # dl=0.1 kpc, y el error en |P| de 240% a <1%).
+    integrando_rm_celda = los.FARADAY_CONSTANT_CGS * pne * b_par * dl_pc
+    rm_cumulative_para_qu = rm_cumulative - 0.5 * integrando_rm_celda
     q_chunk, u_chunk = los.stokes_qu(
-        j_nu, psi_0, rm_cumulative, wavelength, p_index, dl, axis=-1, xp=xp
+        j_nu, psi_0, rm_cumulative_para_qu, wavelength, p_index, dl, axis=-1, xp=xp
     )
+    # La RM total del mapa (no la acumulada por punto) sí es una simple
+    # cuadratura de punto medio de la integral completa a lo largo del
+    # rayo -ya de segundo orden en dl sin corrección adicional, a
+    # diferencia de rm_cumulative_para_qu (que representa una cantidad
+    # física distinta: la rotación entre cada punto de emisión y el
+    # observador, no el camino completo).
     rm_chunk = los.rotation_measure(pne, b_par, dl_pc, axis=-1, xp=xp)
 
     return rm_chunk, i_chunk, q_chunk, u_chunk

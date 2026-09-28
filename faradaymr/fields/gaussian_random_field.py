@@ -57,7 +57,7 @@ def power_law_spectrum(xp, k_mag, spectral_index, k_min, k_max):
     más chicos, Lambda_min): fuera de ese rango no hay turbulencia que
     modelar, así que la amplitud es cero.
     """
-    zeta = spectral_index + 2.0
+    zeta = spectral_index + 4.0
     k_safe = xp.where(k_mag == 0, 1e-20, k_mag)
     return xp.where((k_mag >= k_min) & (k_mag <= k_max), k_safe ** (-zeta / 2.0), 0.0)
 

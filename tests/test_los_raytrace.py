@@ -29,7 +29,9 @@ def test_sample_line_of_sight_interpola_gradiente_lineal_en_x():
     n_celdas = 40
     dx = 2.0
     x_fisico = np.arange(n_celdas) * dx
-    field = np.broadcast_to(x_fisico[:, None, None], (n_celdas, n_celdas, n_celdas)).copy()
+    field = np.broadcast_to(
+        x_fisico[:, None, None], (n_celdas, n_celdas, n_celdas)
+    ).copy()
 
     observer_pos = np.array([5.0, 3.0, 3.0])
     direction = np.array([1.0, 0.0, 0.0])
@@ -39,7 +41,10 @@ def test_sample_line_of_sight_interpola_gradiente_lineal_en_x():
     perfil = lr.sample_line_of_sight(
         field, observer_pos, direction, n_samples, dl, dx, xp=np
     )
-    esperado = observer_pos[0] + np.arange(n_samples) * dl
+    # `sample_line_of_sight` muestrea por defecto en el punto medio de cada
+    # celda, (i+1/2)*dl, no en el borde izquierdo i*dl (ver su docstring y
+    # el punto 5b de errores_faradaymr_vs_hammurabix.md).
+    esperado = observer_pos[0] + (np.arange(n_samples) + 0.5) * dl
 
     assert np.allclose(perfil, esperado)
 
@@ -132,7 +137,11 @@ def test_sky_map_rm_analitica_para_campo_uniforme():
 
     t_salida_esperado = box_size - observer_pos[2]  # dirección +z, desde el centro
     n_samples_esperado = int(np.floor((t_salida_esperado * (1 - 1e-6)) / dl))
-    rm_esperada = 0.812 * ne_val * bz_val * n_samples_esperado * dl
+    # Convención de signo corregida (punto 1 de errores_faradaymr_vs_hammurabix.md):
+    # B_parallel > 0 cuando el campo apunta HACIA el observador, es decir en
+    # -direction. Acá el campo (bz_val>0) apunta a lo largo de +direction
+    # (hacia afuera del observador), así que la RM sale con signo negativo.
+    rm_esperada = -0.812 * ne_val * bz_val * n_samples_esperado * dl
 
     assert np.isclose(rm_map[0, 0], rm_esperada)
 
@@ -250,7 +259,9 @@ def test_sky_map_rm_con_campo_en_x_mirando_hacia_l0_b0():
 
     t_salida_esperado = box_size - observer_pos[0]  # dirección +x, desde el centro
     n_samples_esperado = int(np.floor((t_salida_esperado * (1 - 1e-6)) / dl))
-    rm_esperada = 0.812 * ne_val * b0 * n_samples_esperado * dl
+    # Signo negativo: bx=b0>0 apunta a lo largo de +direction (hacia afuera
+    # del observador), ver nota de convención en la prueba anterior.
+    rm_esperada = -0.812 * ne_val * b0 * n_samples_esperado * dl
 
     assert np.isclose(rm_map[0, 0], rm_esperada)
     assert not np.isclose(rm_map[0, 0], 0.0)
@@ -261,7 +272,9 @@ def test_sky_map_devuelve_forma_correcta():
     dx = 1.0
     box_size = n_celdas * dx
     rng = np.random.RandomState(2)
-    bx, by, bz, ne, ne_rel = rng.uniform(0.1, 1.0, size=(5, n_celdas, n_celdas, n_celdas))
+    bx, by, bz, ne, ne_rel = rng.uniform(
+        0.1, 1.0, size=(5, n_celdas, n_celdas, n_celdas)
+    )
 
     observer_pos = np.array([box_size / 2, box_size / 2, box_size / 2])
     l_grid = np.linspace(-np.pi, np.pi, 4, endpoint=False)
@@ -312,13 +325,26 @@ def test_sky_map_rm_respeta_length_unit_pc_para_caja_en_kpc():
     # Observador a 1 kpc del borde +z de la caja.
     observer_pos = np.array([box_size / 2, box_size / 2, box_size - 1.0])
     dl = 0.05
-    args = (bx, by, bz, ne, ne_rel, observer_pos, dx, box_size,
-            np.array([0.0]), np.array([np.pi / 2]), dl)
+    args = (
+        bx,
+        by,
+        bz,
+        ne,
+        ne_rel,
+        observer_pos,
+        dx,
+        box_size,
+        np.array([0.0]),
+        np.array([np.pi / 2]),
+        dl,
+    )
     kw = dict(frequency=1.0, wavelength=0.0, p_index=3.0, xp=np)
 
     rm_pc, _, _, _ = lr.sky_map(*args, length_unit_pc=1000.0, **kw)
     rm_sin, _, _, _ = lr.sky_map(*args, **kw)
 
-    esperada = 0.812 * 0.03 * 1.0 * 1000.0  # ~1 kpc de camino, en pc
+    # Signo negativo: bz>0 apunta a lo largo de +direction (hacia afuera del
+    # observador); con la convención corregida B_par>0 es hacia el observador.
+    esperada = -0.812 * 0.03 * 1.0 * 1000.0  # ~1 kpc de camino, en pc
     assert np.isclose(rm_pc[0, 0], esperada, rtol=0.06)
     assert np.isclose(rm_pc[0, 0], 1000.0 * rm_sin[0, 0])
