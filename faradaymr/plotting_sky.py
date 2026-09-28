@@ -194,6 +194,114 @@ def figura_estilo_hammurabi(
     return ruta_completa
 
 
+def figuras_individuales_estilo_hammurabi(
+    ruta_destino: str,
+    l_grid,
+    b_grid,
+    paneles: Sequence[tuple],
+    prefijo: str = "figura_1",
+    mirror_l: bool = True,
+    figsize: tuple = (7.5, 5.2),
+):
+    """
+    Una figura Mollweide POR observable, en vez de los N paneles pequeños
+    en una sola fila de `figura_estilo_hammurabi`: cada `.png` sale más
+    grande, con más detalle visible (un panel de 4.2x3.2" dentro de una
+    fila de 4 apenas deja ver la estructura fina del disco; a tamaño
+    completo sí).
+
+    `paneles`: misma convención que en `figura_estilo_hammurabi`
+    -secuencia de (mapa2d, titulo, etiqueta_barra, cmap, simetrico[,
+    escala]) más un nombre de archivo corto al final: en vez de eso, aquí
+    cada tupla es (mapa2d, titulo, etiqueta_barra, cmap, simetrico,
+    nombre_corto[, escala]) porque cada panel necesita su propio nombre de
+    archivo, no solo su contenido.
+
+    Guarda cada panel como `<ruta_destino>/<prefijo>_<nombre_corto>.png` y
+    devuelve la lista de rutas escritas (mismo orden que `paneles`).
+    """
+    import matplotlib.pyplot as plt
+
+    rutas = []
+    for panel in paneles:
+        mapa, titulo, etiqueta, cmap, simetrico, nombre_corto = panel[:6]
+        escala = panel[6] if len(panel) > 6 else "lineal"
+
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(1, 1, 1, projection="mollweide")
+        malla = mollweide_panel(
+            ax, l_grid, b_grid, mapa, cmap=cmap, simetrico=simetrico,
+            mirror_l=mirror_l, escala=escala,
+        )
+        ax.set_title(titulo, fontsize=13, pad=14)
+        cbar = fig.colorbar(
+            malla, ax=ax, orientation="horizontal", fraction=0.055, pad=0.07, aspect=32
+        )
+        cbar.set_label(etiqueta, fontsize=10)
+        cbar.ax.tick_params(labelsize=9)
+
+        nombre_archivo = f"{prefijo}_{nombre_corto}.png"
+        ruta_completa = os.path.join(ruta_destino, nombre_archivo)
+        fig.tight_layout()
+        fig.savefig(ruta_completa, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        rutas.append(ruta_completa)
+
+    return rutas
+
+
+def mapas_individuales_estilo_hammurabi(
+    ruta_destino: str,
+    l_grid,
+    b_grid,
+    rm_map,
+    i_map,
+    q_map,
+    u_map,
+    prefijo: str = "figura_1",
+    umbral_pol: float = 1e-3,
+):
+    """
+    Versión "separada" de `mapa_sintetico_estilo_hammurabi`: los mismos
+    cuatro observables (I, P, ángulo de polarización, RM), pero cada uno
+    en su propio archivo en vez de cuatro paneles pequeños en una sola
+    figura -pedido explícito: más fácil de inspeccionar/insertar cada
+    observable por separado (p.ej. en un póster o una sección distinta de
+    un capítulo), sin perder detalle por el tamaño reducido del panel.
+    """
+    p_map = np.sqrt(np.asarray(q_map) ** 2 + np.asarray(u_map) ** 2)
+    psi_obs = 0.5 * np.arctan2(u_map, q_map)
+    psi_obs = np.where(p_map >= umbral_pol * np.nanmax(p_map), psi_obs, np.nan)
+
+    paneles = [
+        (i_map, "Intensidad total sincrotrón", "u.a.", "inferno", False, "intensidad", "log"),
+        (p_map, "Intensidad polarizada", "u.a.", "inferno", False, "intensidad_polarizada", "log"),
+        (psi_obs, "Ángulo de polarización observado", "rad", "twilight", False, "angulo_polarizacion"),
+        (rm_map, "Medida de Rotación (RM)", r"rad m$^{-2}$", "RdBu_r", True, "rm"),
+    ]
+    return figuras_individuales_estilo_hammurabi(ruta_destino, l_grid, b_grid, paneles, prefijo=prefijo)
+
+
+def angulo_polarizacion_enmascarado(q_map, u_map, umbral_pol: float = 1e-3):
+    """
+    Ángulo de polarización observado (0.5*arctan2(U,Q)), enmascarado a NaN
+    donde la intensidad polarizada P cae por debajo de `umbral_pol` veces
+    el máximo de P en el mapa: con P~0, (Q,U) es ruido numérico y su fase
+    es aleatoria, no una medición real del ángulo. Extraído como función
+    propia (antes vivía inline en `mapa_sintetico_estilo_hammurabi`) para
+    poder probar la lógica de enmascarado en sí, sin tener que inspeccionar
+    píxeles de un PNG ya renderizado.
+
+    Devuelve (p_map, psi_obs_enmascarado).
+    """
+    q_map = np.asarray(q_map, dtype=float)
+    u_map = np.asarray(u_map, dtype=float)
+    p_map = np.sqrt(q_map**2 + u_map**2)
+    psi_obs = 0.5 * np.arctan2(u_map, q_map)
+    psi_obs = np.where(p_map >= umbral_pol * np.nanmax(p_map), psi_obs, np.nan)
+    return p_map, psi_obs
+
+
 def mapa_sintetico_estilo_hammurabi(
     ruta_destino: str,
     l_grid,
@@ -217,12 +325,7 @@ def mapa_sintetico_estilo_hammurabi(
     P y PA son funciones algebraicas puntuales de Q y U que ya devuelve
     `los_raytrace.sky_map`.
     """
-    p_map = np.sqrt(np.asarray(q_map) ** 2 + np.asarray(u_map) ** 2)
-    psi_obs = 0.5 * np.arctan2(u_map, q_map)
-    # El ángulo de polarización solo tiene sentido donde hay señal: con
-    # P ~ 0, (Q, U) es ruido numérico y su fase es aleatoria. Se enmascara
-    # donde P cae por debajo de `umbral_pol` veces el máximo del mapa.
-    psi_obs = np.where(p_map >= umbral_pol * np.nanmax(p_map), psi_obs, np.nan)
+    p_map, psi_obs = angulo_polarizacion_enmascarado(q_map, u_map, umbral_pol=umbral_pol)
 
     paneles = [
         (i_map, "Intensidad total", "u.a.", "inferno", False, "log"),

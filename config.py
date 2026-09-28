@@ -15,6 +15,7 @@ SCALE_RADIAL_NE_KPC = cfg_units.SCALE_RADIAL_NE.to(u.kpc).value
 SCALE_HEIGHT_NE_KPC = cfg_units.SCALE_HEIGHT_NE.to(u.kpc).value
 N_ARMS = cfg_units.N_ARMS
 ARM_WIDTH_KPC = cfg_units.ARM_WIDTH.to(u.kpc).value
+ARM_PHASE0_RAD = np.radians(cfg_units.ARM_PHASE0_DEG)
 PITCH_ANGLE_DEG = cfg_units.PITCH_ANGLE_DEG
 PITCH_ANGLE_RAD = np.radians(PITCH_ANGLE_DEG)
 

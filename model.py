@@ -30,7 +30,7 @@ from faradaymr.fields import LogarithmicSpiralField
 from faradaymr.simulation import GalacticDiskProfile
 
 
-def construir_escenario(use_gpu=None, rng=None, arm_contrast=True):
+def construir_escenario(use_gpu=None, rng=None, arm_contrast=True, return_components=False):
     """
     Arma bx, by, bz, ne, ne_rel para el escenario de foreground galáctico,
     junto con la posición del observador y el tamaño de caja que
@@ -53,6 +53,14 @@ def construir_escenario(use_gpu=None, rng=None, arm_contrast=True):
     arm_contrast : ver `GalacticDiskProfile`; False da un disco puramente
         axisimétrico (sin brazos), útil para aislar el efecto de la
         estructura espiral comparando dos corridas.
+    return_components : si True, además de la tupla habitual, devuelve
+        `((bx_reg, by_reg, bz_reg), (bx_turb, by_turb, bz_turb))` -las
+        componentes regular y turbulenta SIN sumar, útil solo para
+        graficar la comparación regular-vs-total (ver
+        `faradaymr.galactic_structure_plots.comparacion_campo_regular_vs_total`);
+        ningún cálculo físico las necesita por separado (por eso no se
+        devuelven por defecto: cambiaría la forma de la tupla para quien
+        ya llama a esta función sin pedirlas).
 
     Devuelve
     --------
@@ -79,6 +87,7 @@ def construir_escenario(use_gpu=None, rng=None, arm_contrast=True):
         pitch_angle=cfg.PITCH_ANGLE_RAD,
         n_arms=cfg.N_ARMS,
         arm_width=cfg.ARM_WIDTH_KPC,
+        phase0=cfg.ARM_PHASE0_RAD,
         arm_contrast=arm_contrast,
     )
     ne = perfil_disco.density(xx_gc, yy_gc, zz_gc, xp=xp).astype(xp.float32)
@@ -114,4 +123,10 @@ def construir_escenario(use_gpu=None, rng=None, arm_contrast=True):
         [centro_caja - cfg.R_SOLAR_KPC, centro_caja, centro_caja]
     )
 
-    return bx, by, bz, ne, ne_rel, observer_pos, box_size, dx
+    resultado = (bx, by, bz, ne, ne_rel, observer_pos, box_size, dx)
+    if return_components:
+        resultado = resultado + (
+            (bx_reg, by_reg, bz_reg),
+            (bx_turb, by_turb, bz_turb),
+        )
+    return resultado

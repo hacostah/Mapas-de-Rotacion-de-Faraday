@@ -1,3 +1,25 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Cachés de herramientas (regenerables, sin contenido que valga versionar)
+.pytest_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Datos observacionales externos (Proyecto III, `faradaymr.observational`):
+# ~30 MB de FITS/TSV descargados de Zenodo/VizieR/LAMBDA, reproducibles
+# con `data/external/descargar_datos.py` -no tiene sentido versionarlos
+# en git, inflarían el repo sin que el contenido cambie nunca.
+data/external/
+
+# Logs de corridas (`results/logs/`, uno nuevo por cada ejecución de
+# `run.py` vía `faradaymr.logging_config`): crecen sin límite y no llevan
+# información que no esté ya en los mapas/figuras de esa misma corrida.
+results/logs/
+
+# Basura de sistema operativo / editor
+.DS_Store
+*.swp
+.vscode/
+.idea/

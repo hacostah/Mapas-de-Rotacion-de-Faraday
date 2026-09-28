@@ -21,7 +21,7 @@ import numpy as np
 
 import config as cfg
 from model import construir_escenario
-from plots import generar_graficos_estudio
+from plots import generar_graficos_estructura_3d, generar_graficos_estudio
 
 from faradaymr import get_backend, los_raytrace, to_numpy
 from faradaymr.calibration import (
@@ -64,8 +64,28 @@ def ejecutar_corrida(
         "Generando plasma magnetizado (disco + brazos + campo regular + "
         "turbulencia)..."
     )
-    bx, by, bz, ne, ne_rel, observer_pos, box_size, dx = construir_escenario(
-        use_gpu=use_gpu, rng=rng, arm_contrast=arm_contrast
+    (
+        bx, by, bz, ne, ne_rel, observer_pos, box_size, dx,
+        componentes_regular, _componentes_turbulento,
+    ) = construir_escenario(
+        use_gpu=use_gpu, rng=rng, arm_contrast=arm_contrast, return_components=True
+    )
+
+    logger.info("Generando gráficos de estructura 3D (disco + campo)...")
+    generar_graficos_estructura_3d(
+        ruta_destino,
+        to_numpy(ne),
+        to_numpy(bx),
+        to_numpy(by),
+        to_numpy(bz),
+        dx,
+        box_size,
+        to_numpy(observer_pos),
+        cfg.R_SOLAR_KPC,
+        cfg.PITCH_ANGLE_RAD,
+        cfg.N_ARMS,
+        phase0=cfg.ARM_PHASE0_RAD,
+        componentes_regular=tuple(to_numpy(c) for c in componentes_regular),
     )
 
     l_grid = xp.linspace(-xp.pi, xp.pi, cfg.N_L, endpoint=False)

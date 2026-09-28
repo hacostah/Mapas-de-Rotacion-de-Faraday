@@ -53,7 +53,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-def spiral_arm_density_factor(xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, xp=None):
+def spiral_arm_density_factor(
+    xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, phase0=0.0, xp=None
+):
     """
     Factor multiplicativo (>=1) que realza la densidad cerca de `n_arms`
     brazos espirales logarítmicos igualmente espaciados en fase, vistos
@@ -82,6 +84,18 @@ def spiral_arm_density_factor(xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, 
         Láctea.
     arm_width : ancho (1 sigma) de la gaussiana de realce, en las mismas
         unidades que xx, yy.
+    phase0 : radianes, desplazamiento de fase RÍGIDO aplicado a los
+        `n_arms` brazos (todos giran juntos, el espaciado entre ellos no
+        cambia). Por defecto 0.0 -el comportamiento histórico, brazos en
+        `2*pi*i/n_arms` exactos-, lo cual, combinado con la posición fija
+        del observador en `model.construir_escenario` (en phi=180° visto
+        desde el centro galáctico) y `n_arms` par, hace que uno de los
+        brazos caiga EXACTAMENTE sobre el observador (phi=180° es
+        múltiplo de 2*pi/4): un artefacto de construcción, no una elección
+        física -el Sol real está en una región interbrazo (entre
+        Sagitario-Carina y Perseo), no encima de un brazo. Ver
+        `config_fisica.ARM_PHASE0_DEG` para cómo se fija este parámetro en
+        la práctica para evitar esa coincidencia.
     """
     if xp is None:
         import numpy as xp
@@ -95,7 +109,7 @@ def spiral_arm_density_factor(xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, 
 
     factor = xp.ones_like(r)
     for i in range(n_arms):
-        fase = 2.0 * xp.pi * i / n_arms
+        fase = 2.0 * xp.pi * i / n_arms + phase0
         phi_brazo = xp.log(r_seguro / r0) / tan_pitch + fase
         # Diferencia angular llevada a (-pi, pi] antes de convertirla a
         # distancia física: sin este paso, un brazo que da varias vueltas
@@ -145,7 +159,11 @@ class GalacticDiskProfile:
     pitch_angle : radianes; debe coincidir con el que use
         `LogarithmicSpiralField` para el campo regular, por consistencia
         física (frozen-in): ver docstring del módulo.
-    n_arms, arm_width : ver `spiral_arm_density_factor`.
+    n_arms, arm_width, phase0 : ver `spiral_arm_density_factor` (`phase0`
+        por defecto 0.0, el comportamiento histórico; ver
+        `config_fisica.ARM_PHASE0_DEG` para la nota sobre por qué NO
+        dejarlo en 0.0 cuando `n_arms` es par y el observador está en
+        phi=180°, como en `model.construir_escenario`).
     arm_contrast : si False, `density` devuelve solo la envolvente
         axisimétrica (factor espiral fijo en 1), sin brazos. Útil como
         caso límite para pruebas y para aislar el efecto de los brazos al
@@ -159,6 +177,7 @@ class GalacticDiskProfile:
     pitch_angle: float
     n_arms: int = 4
     arm_width: float = 0.5
+    phase0: float = 0.0
     arm_contrast: bool = True
 
     def density(self, xx, yy, zz, xp=None):
@@ -179,6 +198,7 @@ class GalacticDiskProfile:
             self.r0,
             n_arms=self.n_arms,
             arm_width=self.arm_width,
+            phase0=self.phase0,
             xp=xp,
         )
         return envolvente * factor

@@ -4,8 +4,15 @@ matplotlib
 astropy
 h5py
 
+# Proyecto III (foreground galáctico): comparación contra datos reales
+# HEALPix (Oppermann & Enßlin 2012, Haslam et al. 1982) y reproyección de
+# mapas con WCS celeste (issue #37, `faradaymr.observational`).
+healpy
+reproject
+
 # GPU (Colab): instalar la build de cupy que coincide con el CUDA de la
-# imagen (ver Faraday_MR_Colab.ipynb, celda 1). No se fija una versión
-# aquí porque depende del runtime de Colab en el momento de correr, no
-# de este proyecto -en local sin GPU, dejar comentada.
+# imagen (ver Faraday_MR_Colab.ipynb, sección "Instalar dependencias" -
+# detecta la versión de CUDA e instala el paquete correcto sola). No se
+# fija una versión aquí porque depende del runtime de Colab en el momento
+# de correr, no de este proyecto -en local sin GPU, dejar comentada.
 # cupy-cuda12x

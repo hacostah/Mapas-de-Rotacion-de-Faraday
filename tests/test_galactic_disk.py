@@ -103,6 +103,68 @@ def test_arm_contrast_false_ignora_brazos():
     assert np.any(con_brazos > sin_brazos)
 
 
+def test_phase0_rota_los_brazos_sin_cambiar_su_espaciado():
+    # phase0 debe desplazar los n_arms brazos como un bloque rígido: el
+    # factor con phase0=delta en la posición phi es idéntico al factor con
+    # phase0=0 evaluado en phi-delta (una rotación pura, sin cambiar forma
+    # ni espaciado entre brazos).
+    pitch = np.radians(-12.0)
+    r0 = 8.0
+    r = 8.0
+    delta = np.pi / 4
+
+    fase_prueba = 0.7
+    xx_con_phase0 = np.array([r * np.cos(fase_prueba)])
+    yy_con_phase0 = np.array([r * np.sin(fase_prueba)])
+    xx_sin_phase0 = np.array([r * np.cos(fase_prueba - delta)])
+    yy_sin_phase0 = np.array([r * np.sin(fase_prueba - delta)])
+
+    factor_con = spiral_arm_density_factor(
+        xx_con_phase0, yy_con_phase0, pitch, r0, n_arms=4, arm_width=0.5,
+        phase0=delta, xp=np,
+    )
+    factor_sin = spiral_arm_density_factor(
+        xx_sin_phase0, yy_sin_phase0, pitch, r0, n_arms=4, arm_width=0.5,
+        phase0=0.0, xp=np,
+    )
+    assert np.allclose(factor_con, factor_sin)
+
+
+def test_arm_phase0_config_pone_al_observador_lo_mas_lejos_posible_de_un_brazo():
+    # Regresión del bug reportado: con phase0=0 (el default de la función)
+    # y N_ARMS=4, un brazo cae exactamente en phi=180°, que es DONDE
+    # `model.construir_escenario` coloca al observador (desplazado -R_SOLAR
+    # a lo largo de x desde el centro galáctico) -el Sol termina sobre la
+    # cresta de un brazo, n_e local sale 2x el valor de referencia
+    # "interbrazo" que declara NE0 en config_fisica.py. `ARM_PHASE0_DEG`
+    # (180/N_ARMS) corrige esto poniendo al observador exactamente a mitad
+    # de camino entre dos brazos -el mínimo local del factor espiral.
+    pitch = np.radians(-12.0)
+    r0 = 8.0
+    n_arms = 4
+    phase0_corregido = np.radians(180.0 / n_arms)
+
+    # Observador: phi=180° (x=-r0, y=0), mismo r0 que el radio de referencia.
+    xx_obs = np.array([-r0])
+    yy_obs = np.array([0.0])
+
+    factor_sin_correccion = spiral_arm_density_factor(
+        xx_obs, yy_obs, pitch, r0, n_arms=n_arms, arm_width=0.5, phase0=0.0, xp=np
+    )
+    factor_corregido = spiral_arm_density_factor(
+        xx_obs, yy_obs, pitch, r0, n_arms=n_arms, arm_width=0.5,
+        phase0=phase0_corregido, xp=np,
+    )
+
+    # Antes de corregir: el observador cae justo sobre un brazo (factor
+    # máximo posible, 2.0, ver test_factor_espiral_vale_maximo_sobre_la_curva_del_brazo).
+    assert np.isclose(factor_sin_correccion[0], 2.0, atol=1e-6)
+    # Con la corrección: el observador queda en el mínimo local posible
+    # del factor espiral (estrictamente menor que sobre cualquier brazo).
+    assert factor_corregido[0] < factor_sin_correccion[0]
+    assert factor_corregido[0] < 1.1
+
+
 def test_callable_es_azucar_sintactica_de_density():
     perfil = GalacticDiskProfile(
         n_e0=0.03, r0=8.0, scale_radial=3.5, scale_height=1.0,
