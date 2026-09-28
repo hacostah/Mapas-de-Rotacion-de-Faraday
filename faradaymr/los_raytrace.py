@@ -421,6 +421,7 @@ def _sky_map_chunk(
     margin,
     xp,
     mode,
+    length_unit_pc=1.0,
 ):
     """
     Calcula (RM, I, Q, U) para un lote de píxeles (l_chunk, b_chunk) -ambos
@@ -510,11 +511,16 @@ def _sky_map_chunk(
     i_chunk = los.synchrotron_intensity(j_nu, dl, axis=-1, xp=xp)
 
     psi_0 = los.polarization_angle_intrinsic(b1, b2, xp=xp)
-    rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl, axis=-1, xp=xp)
+    # La geometría (posición de las muestras, alcance del rayo) va en las
+    # unidades de la caja (`dl`, p.ej. kpc), pero la constante 0.812 de
+    # `los.rotation_measure*` solo vale con dl en pc: se convierte aquí,
+    # solo para RM. `j_nu` (u.a.) no depende de esta unidad.
+    dl_pc = dl * length_unit_pc
+    rm_cumulative = los.rotation_measure_cumulative(pne, b_par, dl_pc, axis=-1, xp=xp)
     q_chunk, u_chunk = los.stokes_qu(
         j_nu, psi_0, rm_cumulative, wavelength, p_index, dl, axis=-1, xp=xp
     )
-    rm_chunk = los.rotation_measure(pne, b_par, dl, axis=-1, xp=xp)
+    rm_chunk = los.rotation_measure(pne, b_par, dl_pc, axis=-1, xp=xp)
 
     return rm_chunk, i_chunk, q_chunk, u_chunk
 
@@ -538,6 +544,7 @@ def sky_map(
     xp=None,
     mode="nearest",
     pixel_chunk_size=4096,
+    length_unit_pc=1.0,
 ):
     """
     Mapa de cielo (l, b) en grilla regular -RM, I, Q, U- visto por un
@@ -581,6 +588,13 @@ def sky_map(
     adecuada para un primer modelo de juguete (ver `faradaymr.plotting_sky`
     para desplegar esta grilla con una proyección de igual área tipo
     Mollweide, como las figuras de Waelkens et al. 2008).
+
+    length_unit_pc : cuántos pc vale una unidad de longitud de la caja
+        (`dl`, `dx`, `box_size`, `observer_pos`). Solo afecta a RM y a la
+        rotación de Faraday de Q/U, porque la constante 0.812 de
+        `los.rotation_measure` exige dl en pc. Default 1.0 (la caja ya está
+        en pc, comportamiento histórico); para una caja en kpc pasar
+        1000.0. Con la unidad equivocada RM sale mal por ese mismo factor.
 
     Devuelve
     --------
@@ -627,6 +641,7 @@ def sky_map(
             margin,
             xp,
             mode,
+            length_unit_pc,
         )
         rm_flat[inicio:fin] = rm_chunk
         i_flat[inicio:fin] = i_chunk

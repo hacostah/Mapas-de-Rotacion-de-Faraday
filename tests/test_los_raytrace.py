@@ -292,3 +292,33 @@ def test_sky_map_devuelve_forma_correcta():
     assert u_map.shape == forma_esperada
     assert np.all(np.isfinite(rm_map))
     assert np.all(np.isfinite(i_map))
+
+
+def test_sky_map_rm_respeta_length_unit_pc_para_caja_en_kpc():
+    # Losa uniforme de 1 kpc de espesor efectivo hacia +z, con n_e=0.03
+    # cm^-3 y B_par=1 uG: RM = 0.812 * 0.03 * 1 * 1000 pc ~ 24.4 rad/m^2.
+    # La caja está en kpc (dx=0.5), así que sin `length_unit_pc=1000` la RM
+    # saldría 1000x más chica (dl en kpc tratado como pc): este test fija
+    # esa conversión, que antes faltaba y hacía que RM y la rotación de
+    # Faraday de Q/U salieran mal por ese factor.
+    n_celdas = 20
+    dx = 0.5
+    box_size = n_celdas * dx
+    ne = np.full((n_celdas,) * 3, 0.03)
+    bz = np.full((n_celdas,) * 3, 1.0)
+    bx = np.zeros_like(bz)
+    by = np.zeros_like(bz)
+    ne_rel = np.zeros_like(ne)
+    # Observador a 1 kpc del borde +z de la caja.
+    observer_pos = np.array([box_size / 2, box_size / 2, box_size - 1.0])
+    dl = 0.05
+    args = (bx, by, bz, ne, ne_rel, observer_pos, dx, box_size,
+            np.array([0.0]), np.array([np.pi / 2]), dl)
+    kw = dict(frequency=1.0, wavelength=0.0, p_index=3.0, xp=np)
+
+    rm_pc, _, _, _ = lr.sky_map(*args, length_unit_pc=1000.0, **kw)
+    rm_sin, _, _, _ = lr.sky_map(*args, **kw)
+
+    esperada = 0.812 * 0.03 * 1.0 * 1000.0  # ~1 kpc de camino, en pc
+    assert np.isclose(rm_pc[0, 0], esperada, rtol=0.06)
+    assert np.isclose(rm_pc[0, 0], 1000.0 * rm_sin[0, 0])

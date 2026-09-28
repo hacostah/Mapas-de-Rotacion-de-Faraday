@@ -39,3 +39,7 @@ N_B = cfg_units.N_B
 B_MAX_DEG = cfg_units.B_MAX_DEG
 DL_KPC = cfg_units.DL.to(u.kpc).value
 PIXEL_CHUNK_SIZE = cfg_units.PIXEL_CHUNK_SIZE
+
+# pc por kpc: la caja está en kpc pero RM (0.812 * n_e[cm^-3] * B[uG] * dl[pc])
+# necesita dl en pc; se pasa a `los_raytrace.sky_map(length_unit_pc=...)`.
+KPC_A_PC = 1000.0

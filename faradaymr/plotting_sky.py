@@ -73,6 +73,8 @@ def mollweide_panel(
     vmin=None,
     vmax=None,
     mirror_l=True,
+    escala="lineal",
+    rango_dinamico=1e4,
 ):
     """
     Dibuja un único panel ovalado (Mollweide) sobre unos ejes `ax` que ya
@@ -85,21 +87,39 @@ def mollweide_panel(
     `False`, con `vmin`/`vmax` iguales al rango de datos salvo que se
     pasen explícitamente.
 
+    `escala="log"` usa una escala logarítmica con `rango_dinamico` décadas
+    (vmin = vmax / rango_dinamico): necesaria para intensidad sincrotrón,
+    cuyo contraste centro/plano/alto-b abarca varios órdenes de magnitud y en
+    escala lineal deja todo salvo el centro galáctico en negro.
+
     Devuelve el objeto `QuadMesh` de `pcolormesh` (para poder pasarlo a
     `fig.colorbar` con el formato que quiera quien llama).
     """
     lon, lat, datos = _preparar_grilla_mollweide(l_grid, b_grid, mapa, mirror_l=mirror_l)
 
     if simetrico:
-        escala = vmax if vmax is not None else float(np.nanmax(np.abs(datos)))
-        vmin_final, vmax_final = -escala, escala
+        amplitud = vmax if vmax is not None else float(np.nanmax(np.abs(datos)))
+        vmin_final, vmax_final = -amplitud, amplitud
     else:
         vmin_final = vmin if vmin is not None else float(np.nanmin(datos))
         vmax_final = vmax if vmax is not None else float(np.nanmax(datos))
 
-    malla = ax.pcolormesh(
-        lon, lat, datos, cmap=cmap, vmin=vmin_final, vmax=vmax_final, shading="auto"
-    )
+    if escala == "log":
+        from matplotlib.colors import LogNorm
+
+        techo = vmax if vmax is not None else float(np.nanmax(datos))
+        malla = ax.pcolormesh(
+            lon,
+            lat,
+            np.clip(datos, techo / rango_dinamico, None),
+            cmap=cmap,
+            norm=LogNorm(vmin=techo / rango_dinamico, vmax=techo),
+            shading="auto",
+        )
+    else:
+        malla = ax.pcolormesh(
+            lon, lat, datos, cmap=cmap, vmin=vmin_final, vmax=vmax_final, shading="auto"
+        )
     # Estilo "paper": sin marcas de longitud/latitud, solo el contorno
     # ovalado de la proyección y una rejilla tenue de meridianos/paralelos
     # (igual que Fig. 1/2/4 de Waelkens et al. 2008, que no rotulan los
@@ -129,7 +149,8 @@ def figura_estilo_hammurabi(
     preferir Mollweide).
 
     `paneles`: secuencia de tuplas
-        (mapa2d, titulo, etiqueta_barra, cmap, simetrico)
+        (mapa2d, titulo, etiqueta_barra, cmap, simetrico[, escala])
+    (`escala` opcional: "lineal" por defecto o "log", ver `mollweide_panel`)
     una por panel, en el orden en que deben aparecer (izquierda a
     derecha) -por ejemplo, el mismo orden que usa la Fig. 1 del paper:
     intensidad total, intensidad polarizada, ángulo de polarización, RM.
@@ -142,10 +163,19 @@ def figura_estilo_hammurabi(
     n_paneles = len(paneles)
     fig = plt.figure(figsize=(figsize_por_panel[0] * n_paneles, figsize_por_panel[1] + 0.6))
 
-    for i, (mapa, titulo, etiqueta, cmap, simetrico) in enumerate(paneles):
+    for i, panel in enumerate(paneles):
+        mapa, titulo, etiqueta, cmap, simetrico = panel[:5]
+        escala = panel[5] if len(panel) > 5 else "lineal"
         ax = fig.add_subplot(1, n_paneles, i + 1, projection="mollweide")
         malla = mollweide_panel(
-            ax, l_grid, b_grid, mapa, cmap=cmap, simetrico=simetrico, mirror_l=mirror_l
+            ax,
+            l_grid,
+            b_grid,
+            mapa,
+            cmap=cmap,
+            simetrico=simetrico,
+            mirror_l=mirror_l,
+            escala=escala,
         )
         ax.set_title(titulo, fontsize=10, pad=10)
         cbar = fig.colorbar(
@@ -177,6 +207,7 @@ def mapa_sintetico_estilo_hammurabi(
         "Foreground galáctico sintético (disco + brazos espirales + campo "
         "regular espiral + turbulencia)"
     ),
+    umbral_pol: float = 1e-3,
 ):
     """
     Reemplazo, en proyección Mollweide, de `plots.fig1_mapa_de_cielo`: los
@@ -188,10 +219,14 @@ def mapa_sintetico_estilo_hammurabi(
     """
     p_map = np.sqrt(np.asarray(q_map) ** 2 + np.asarray(u_map) ** 2)
     psi_obs = 0.5 * np.arctan2(u_map, q_map)
+    # El ángulo de polarización solo tiene sentido donde hay señal: con
+    # P ~ 0, (Q, U) es ruido numérico y su fase es aleatoria. Se enmascara
+    # donde P cae por debajo de `umbral_pol` veces el máximo del mapa.
+    psi_obs = np.where(p_map >= umbral_pol * np.nanmax(p_map), psi_obs, np.nan)
 
     paneles = [
-        (i_map, "Intensidad total", "u.a.", "inferno", False),
-        (p_map, "Intensidad polarizada", "u.a.", "inferno", False),
+        (i_map, "Intensidad total", "u.a.", "inferno", False, "log"),
+        (p_map, "Intensidad polarizada", "u.a.", "inferno", False, "log"),
         (psi_obs, "Ángulo de polarización", "rad", "twilight", False),
         (rm_map, "Medida de Rotación (RM)", r"rad m$^{-2}$", "RdBu_r", True),
     ]
