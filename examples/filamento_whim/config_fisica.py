@@ -50,3 +50,12 @@ LAMBDA_ONDA = const.c / NU
 # núcleo que sigue cabiendo con margen dentro de la caja por defecto
 # (N_BASE*DX_BASE = 128*20 = 2560 kpc; 4*RC = 1200 kpc < 2560/2 = 1280 kpc).
 DIST_MAX_AJUSTE = 4.0 * RC
+
+# Número de BORDES de bin usados para binear sigma_RM(d) en la ventana
+# 0-DIST_MAX_AJUSTE (con N_BORDES_PERFIL bordes hay N_BORDES_PERFIL-1 bins).
+# Un solo valor compartido entre `run_barrido_theta.py` y
+# `plots.fig2_perfil_transversal_con_ajuste`: antes usaban 12 y 15 bordes
+# respectivamente, así que la figura de ejemplo (fig2) no era comparable
+# bin a bin con el barrido Monte Carlo real (figs 3/4) pese a compartir la
+# misma ventana de ajuste.
+N_BORDES_PERFIL = 12

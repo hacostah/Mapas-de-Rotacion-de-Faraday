@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import warnings
 from examples.filamento_whim.validacion import verificar_caja_suficiente
@@ -74,3 +75,28 @@ def test_verificar_caja_peor_caso_es_el_theta_mas_cercano_a_cero():
         )
     assert solo_theta_chico is False
     assert solo_theta_grande is True
+
+
+def test_verificar_caja_acepta_array_numpy_de_thetas():
+    # Bug corregido: `if not thetas_grados` lanza ValueError con un array de
+    # numpy de más de un elemento ("truth value... is ambiguous"). Esto no
+    # se disparaba en run_barrido_theta.py (convierte a lista antes de
+    # llamar aquí), pero sí en cualquier llamada directa con un array -por
+    # ejemplo, pasando theta_grados=np.linspace(...) sin convertir.
+    resultado = verificar_caja_suficiente(
+        n_base=100,
+        dx_base_kpc=10.0,
+        longitud_filamento_kpc=1000.0,
+        thetas_grados=np.array([0.0, 45.0, 90.0]),
+    )
+    assert resultado is True
+
+
+def test_verificar_caja_array_vacio_retorna_true():
+    resultado = verificar_caja_suficiente(
+        n_base=100,
+        dx_base_kpc=10.0,
+        longitud_filamento_kpc=1000.0,
+        thetas_grados=np.array([]),
+    )
+    assert resultado is True

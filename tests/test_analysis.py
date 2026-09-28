@@ -115,6 +115,80 @@ def test_transverse_rm_dispersion_no_duplica_logica():
     assert np.allclose(valores, valores_esperados, equal_nan=True)
 
 
+def test_radial_profile_con_mascara_excluye_pixeles():
+    # `mascara` debe descartar por completo los píxeles marcados con False,
+    # cambiando el estadístico calculado en el bin (no solo ponerlos a NaN
+    # dentro del cálculo, que seguiría afectando media/std del bin).
+    distancia = np.array([0.0, 0.0, 1.0, 1.0])
+    mapa = np.array([10.0, -10.0, 100.0, 5.0])  # bin 1 con outlier 100.0
+    # Al excluir el outlier, el bin 1 queda con un solo punto (std=0, no NaN:
+    # NaN es para un bin que queda TOTALMENTE vacío, ver el siguiente test).
+    mascara = np.array([True, True, False, True])
+
+    _, valores_sin_mascara = radial_profile(mapa, distancia, bins=[-0.5, 0.5, 1.5], statistic="std")
+    _, valores_con_mascara = radial_profile(
+        mapa, distancia, bins=[-0.5, 0.5, 1.5], statistic="std", mascara=mascara
+    )
+
+    assert valores_sin_mascara[1] > 0.0  # el outlier infla el std sin máscara
+    assert np.isclose(valores_con_mascara[1], 0.0)  # un solo punto: std=0
+    assert np.isclose(valores_con_mascara[0], valores_sin_mascara[0])
+
+
+def test_radial_profile_con_mascara_bin_vacio_da_nan():
+    distancia = np.array([0.0, 0.0, 1.0, 1.0])
+    mapa = np.array([10.0, -10.0, 5.0, 5.0])
+    mascara = np.array([True, True, False, False])  # bin 1 queda totalmente vacío
+
+    _, valores = radial_profile(
+        mapa, distancia, bins=[-0.5, 0.5, 1.5], statistic="std", mascara=mascara
+    )
+
+    assert np.isnan(valores[1])
+
+
+def test_transverse_rm_dispersion_footprint_mask_evita_dilucion():
+    # Reproduce el bug de dilución: un filamento finito deja RM=0 en los
+    # píxeles más allá de sus puntas proyectadas. Sin excluirlos
+    # (footprint_mask), esos ceros se mezclan con el ruido real del
+    # filamento en el mismo bin de distancia y bajan el std medido.
+    #
+    # Con axis=[1,0,0] (eje 0 = "a lo largo del filamento"), la distancia
+    # transversal que calcula `projected_axis_distance` depende solo del eje
+    # 1 ("y"); un mismo bin de distancia agrupa TODAS las filas del eje 0
+    # ("x", posición a lo largo del filamento) que caigan en esa banda de y.
+    # Simulamos la longitud finita restringiendo el ruido real a una franja
+    # de filas en x (|x-centro|<=5) y dejando el resto en 0 -exactamente lo
+    # que hace la máscara axial de `model.construir_escenario` para un
+    # filamento visto de lado.
+    pixel_size = 1.0
+    n = 41
+    filament_axis_3d = [1.0, 0.0, 0.0]
+
+    rng = np.random.default_rng(7)
+    rm_map = np.zeros((n, n))
+    footprint = np.zeros((n, n), dtype=bool)
+    centro = n // 2
+    for i in range(centro - 5, centro + 6):
+        rm_map[i, :] = rng.normal(scale=3.0, size=n)
+        footprint[i, :] = True
+
+    bordes = np.linspace(0, centro, 6)
+    _, dispersion_diluida = transverse_rm_dispersion(
+        rm_map, filament_axis_3d, pixel_size, bordes
+    )
+    _, dispersion_corregida = transverse_rm_dispersion(
+        rm_map, filament_axis_3d, pixel_size, bordes, footprint_mask=footprint
+    )
+
+    # La dispersión sin máscara está diluida por las filas en 0 fuera del
+    # tramo finito (30 de 41 filas, en este mapa), así que sistemáticamente
+    # da un valor menor que excluyéndolas.
+    validos = ~np.isnan(dispersion_diluida) & ~np.isnan(dispersion_corregida)
+    assert np.any(validos)
+    assert np.all(dispersion_diluida[validos] < dispersion_corregida[validos])
+
+
 def test_dispersion_transversal_decrece_al_alejarse_del_eje_del_filamento():
     # Mismo observable físico de antes (Proyecto II), ahora sobre un mapa
     # 2D real y pasando por la API definitiva (eje 3D + pixel_size), en vez

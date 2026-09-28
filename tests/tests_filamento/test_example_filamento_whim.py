@@ -24,7 +24,12 @@ def test_simetria_cilindrica_escenario():
     )
 
     n_base = cfg.N_BASE
-    eje_z = np.linspace(-n_base / 2, n_base / 2, n_base) * cfg.DX_BASE_KPC
+    # Misma convención de malla que `model.construir_escenario` (arange con
+    # offset entero, paso EXACTO de DX_BASE_KPC) -antes esta prueba ubicaba
+    # los índices con la fórmula vieja (`linspace(-N/2, N/2, N)`, paso real
+    # ligeramente distinto), lo que hubiera desalineado los índices respecto
+    # a la malla real una vez corregido el paso en `model.py`.
+    eje_z = (np.arange(n_base) - n_base // 2) * cfg.DX_BASE_KPC
     media_longitud = cfg.LONGITUD_FILAMENTO_KPC / 2.0
 
     # Dos posiciones bien DENTRO del tramo finito del filamento (a 0% y 40%
@@ -73,6 +78,32 @@ def test_simetria_cilindrica_escenario():
 
     assert densidad_centro > densidad_borde_transversal, "Error: La densidad no decae radialmente desde el núcleo."
 
+def test_construir_escenario_reutiliza_campo_b_dado():
+    # `campo_b` debe usarse tal cual, sin regenerar el campo turbulento
+    # (optimización del barrido en theta: el campo no depende de
+    # axis_direction, así que se genera una sola vez por semilla y se
+    # reutiliza en cada ángulo).
+    rng = np.random.RandomState(0)
+    bx0, by0, bz0, _, _, _ = construir_escenario(
+        n_spec=3.0, b0_microgauss=0.05, axis_direction=[0, 0, 1],
+        use_gpu=False, rng=rng,
+    )
+    campo_b = (bx0, by0, bz0)
+
+    bx1, by1, bz1, ne1, _, _ = construir_escenario(
+        n_spec=3.0, b0_microgauss=0.05, axis_direction=[1, 0, 0],
+        use_gpu=False, campo_b=campo_b,
+    )
+
+    # Mismo campo exacto, aunque axis_direction cambió (afecta solo a ne).
+    np.testing.assert_array_equal(bx1, bx0)
+    np.testing.assert_array_equal(by1, by0)
+    np.testing.assert_array_equal(bz1, bz0)
+    # La forma de ne debe coincidir con la del campo dado, no con cfg.N_BASE
+    # a ciegas (ver la nota sobre reload en model.py).
+    assert ne1.shape == bx0.shape
+
+
 def test_pipeline_filamento_corre_de_punta_a_punta_y_ajusta_gaussiana():
     from faradaymr import ObservationConfig, ObservationPipeline
     from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
@@ -92,10 +123,21 @@ def test_pipeline_filamento_corre_de_punta_a_punta_y_ajusta_gaussiana():
     lambda_m = config_fisica.LAMBDA_ONDA.to_value(u.m)
     p_spec = config_fisica.P_SPEC
     
-    # Usamos mock para reducir la malla de forma segura sin sobreescribir configuraciones globales
+    # Usamos mock para reducir la malla de forma segura sin sobreescribir configuraciones globales.
+    # También reducimos r_c en la misma proporción que la malla: con el
+    # r_c=300 kpc real y una caja de solo 32*20=640 kpc de lado, la densidad
+    # apenas cae hacia el borde de la caja (factor ~1.8), y con una sola
+    # realización de un campo turbulento cuya escala más grande (LAMBDA_MAX
+    # =500 kpc) es comparable al tamaño de la caja, el ruido de muestreo
+    # domina sobre esa señal física débil -el test resultaba frágil (pasaba
+    # o no según el seed y la métrica de distancia exacta, no según si la
+    # física estaba bien). Con r_c=40 kpc la densidad cae con fuerza dentro
+    # de la caja de prueba y la tendencia física es robusta a esto.
     with mock.patch('examples.filamento_whim.config_fisica.N_BASE', n_base_test), \
-         mock.patch('examples.filamento_whim.config.N_BASE', n_base_test):
-         
+         mock.patch('examples.filamento_whim.config.N_BASE', n_base_test), \
+         mock.patch('examples.filamento_whim.config_fisica.RC', 40.0 * u.kpc), \
+         mock.patch('examples.filamento_whim.config.RC_KPC', 40.0):
+
         axis_direction = [0.0, 0.0, 1.0]
         # Fijamos la semilla para que el comportamiento del ruido sea determinista en el test
         rng = np.random.RandomState(42) 

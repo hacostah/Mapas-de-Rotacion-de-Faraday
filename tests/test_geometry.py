@@ -1,6 +1,11 @@
 import numpy as np
 import pytest
-from faradaymr.simulation.geometry import cylindrical_radius, filament_axis_from_viewing_angle, projected_axis_distance
+from faradaymr.simulation.geometry import (
+    cylindrical_radius,
+    filament_axis_from_viewing_angle,
+    projected_axis_distance,
+    sky_footprint_mask,
+)
 
 def test_cylindrical_radius_eje_z():
     """Prueba que el radio cilíndrico respecto al eje Z ignora la coordenada Z."""
@@ -88,3 +93,42 @@ def test_projected_axis_distance_caso_degenerado_no_lanza_error():
     # Filamento paralelo a la línea de visión: proyección nula en (x,y).
     d = projected_axis_distance((5, 5), [0.0, 0.0, 1.0], pixel_size=1.0, xp=np)
     assert np.all(np.isfinite(d))
+
+
+def test_projected_axis_distance_theta_cero_es_radial_no_arbitraria():
+    # Bug corregido: con el eje paralelo a la LOS (theta=0), la proyección
+    # sobre el cielo es un punto, no una recta -la vista es circularmente
+    # simétrica. La versión anterior caía en una convención arbitraria
+    # ([1,0]) y terminaba midiendo |y| en vez de la distancia radial
+    # sqrt(x^2+y^2), rompiendo esa simetría justo en el caso más usado del
+    # barrido en theta (theta=0, "de frente").
+    d = projected_axis_distance((7, 7), [0.0, 0.0, 1.0], pixel_size=1.0, xp=np)
+    x = np.arange(7) - 7 // 2
+    y = np.arange(7) - 7 // 2
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    esperado = np.sqrt(xx.astype(float) ** 2 + yy.astype(float) ** 2)
+    np.testing.assert_allclose(d, esperado)
+    # Puntos a la misma distancia radial en distintas direcciones deben dar
+    # el mismo valor -con la convención anterior (|y|) esto fallaba, por
+    # ejemplo, entre (3,0) y (0,3) respecto al centro.
+    centro = 7 // 2
+    assert np.isclose(d[centro + 3, centro], d[centro, centro + 3])
+
+
+def test_sky_footprint_mask_excluye_fuera_del_umbral():
+    ne = np.zeros((4, 4, 10))
+    ne[1, 1, :] = 1.0  # una columna con densidad apreciable en toda su LOS
+    ne[2, 2, 3:6] = 1.0  # una columna con densidad solo en una parte de la LOS
+    mascara = sky_footprint_mask(ne, umbral_relativo=1e-3)
+    assert mascara.shape == (4, 4)
+    assert mascara[1, 1]
+    assert mascara[2, 2]
+    assert not mascara[0, 0]
+    assert not mascara[3, 3]
+
+
+def test_sky_footprint_mask_todo_cero_no_lanza_error():
+    ne = np.zeros((3, 3, 5))
+    mascara = sky_footprint_mask(ne)
+    assert mascara.shape == (3, 3)
+    assert not np.any(mascara)

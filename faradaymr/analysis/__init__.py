@@ -7,7 +7,9 @@ from .fitting import (
     beta_dispersion_model,
     fit_beta_dispersion,
     BetaFitResult,
+    p_random_walk_cilindro,
 )
+from .deteccion import n_fuentes_necesarias, resumen_umbral_deteccion
 
 __all__ = [
     "estimate_rm_lsq",
@@ -19,4 +21,7 @@ __all__ = [
     "beta_dispersion_model",
     "fit_beta_dispersion",
     "BetaFitResult",
+    "p_random_walk_cilindro",
+    "n_fuentes_necesarias",
+    "resumen_umbral_deteccion",
 ]

@@ -66,6 +66,74 @@ def axial_projection(xx, yy, zz, axis_direction, xp=None):
     return xp.tensordot(pos, eje, axes=([-1], [0]))
 
 
+def sky_footprint_mask(ne, umbral_relativo=1e-3, axis=-1, xp=None):
+    """
+    Máscara 2D booleana: True donde la línea de visión atraviesa densidad
+    apreciable del filamento en algún punto de su profundidad (por encima
+    de `umbral_relativo * max(ne)`).
+
+    Por qué hace falta: con un filamento de longitud FINITA (ver
+    `model.construir_escenario`, que aplica un corte axial suave sobre
+    `ne`), algunos píxeles del mapa 2D quedan "más allá de las puntas" del
+    filamento proyectado sobre el cielo y tienen RM≈0 en toda su línea de
+    visión -no porque ahí no haya señal por ruido estadístico, sino porque
+    genuinamente no hay filamento en ese punto del cielo. Si esos píxeles
+    se incluyen al calcular la dispersión transversal de RM
+    (`faradaymr.analysis.spatial_stats.transverse_rm_dispersion`), diluyen
+    el `std` de cada bin con ceros que no son parte de la física que se
+    quiere medir.
+
+    Se calcula directamente sobre la densidad 3D ya construida (`ne`, con
+    el corte axial ya aplicado) en vez de con una fórmula geométrica 2D
+    aproximada, porque una aproximación así (proyectar el eje al plano del
+    cielo y cortar por `|proyección| <= L/2`) solo es exacta cuando el eje
+    del filamento no tiene componente a lo largo de la línea de visión
+    (theta=90°): para cualquier otro ángulo, la posición a lo largo del eje
+    de un punto en la línea de visión cambia con la profundidad, así que
+    "está dentro o fuera de la banda proyectada" no es una propiedad fija
+    de (x, y) sola. Usar `ne` directamente (que ya incorpora el corte axial
+    real, `axial_projection`, vía `model.construir_escenario`) es exacto
+    para cualquier ángulo sin necesitar esa aproximación.
+
+    El umbral (0.1% de la densidad pico por defecto) es deliberadamente
+    bajo: no debe recortar el perfil radial normal del filamento (a
+    `DIST_MAX_AJUSTE = 4*r_c`, la densidad de un perfil beta típico sigue
+    siendo ~5-10% del pico), solo excluir las regiones genuinamente vacías
+    más allá del corte axial.
+
+    Parámetros
+    ----------
+    ne : ndarray 3D
+        Densidad electrónica ya con el corte axial aplicado (ver
+        `model.construir_escenario`). El eje de línea de visión debe ser
+        el último (`axis=-1`), la misma convención que usa todo el resto
+        del framework (`faradaymr.pipeline.ObservationPipeline`).
+    umbral_relativo : float
+        Fracción del máximo de `ne` por debajo de la cual se considera que
+        un punto no tiene densidad apreciable.
+    axis : int
+        Eje de integración de la línea de visión (por convención, -1).
+    xp : module, opcional
+        numpy o cupy.
+
+    Devuelve
+    --------
+    mascara : ndarray 2D de booleanos, con la forma de `ne` sin el eje LOS.
+    """
+    if xp is None:
+        try:
+            import cupy as xp
+        except ImportError:
+            import numpy as xp
+
+    pico = xp.max(ne)
+    if pico <= 0:
+        forma_2d = tuple(n for i, n in enumerate(ne.shape) if i != (axis % ne.ndim))
+        return xp.zeros(forma_2d, dtype=bool)
+    umbral = umbral_relativo * pico
+    return xp.any(ne > umbral, axis=axis)
+
+
 def filament_axis_from_viewing_angle(theta_rad):
     """
     Vector unitario del eje del filamento para un ángulo de vista theta_rad
@@ -131,27 +199,29 @@ def projected_axis_distance(shape, filament_axis_3d, pixel_size, xp=None):
         except ImportError:
             import numpy as xp
 
+    nx, ny = shape
+    x = (xp.arange(nx) - nx // 2) * pixel_size
+    y = (xp.arange(ny) - ny // 2) * pixel_size
+    xx, yy = xp.meshgrid(x, y, indexing="ij")
+
     axis_2d = xp.asarray(filament_axis_3d[:2], dtype=float)
     norma = xp.linalg.norm(axis_2d)
-    if norma > 0:
-        axis_2d = axis_2d / norma
-    else:
-        # Filamento paralelo a la línea de visión: su proyección sobre el
-        # cielo es un punto, no una recta, así que "distancia al eje
-        # proyectado" no tiene una dirección física privilegiada. Se elige
-        # [1, 0] como convención arbitraria pero determinística -para que
-        # un barrido en theta que pase por este caso límite (theta=0) no
-        # se caiga por una división por cero.
-        axis_2d = xp.array([1.0, 0.0])
+    if norma == 0:
+        # Filamento paralelo a la línea de visión (theta=0): su proyección
+        # sobre el cielo es un punto, no una recta, así que la vista es
+        # circularmente simétrica alrededor del centro del mapa. La
+        # distancia relevante es entonces la radial sqrt(x^2+y^2), NO la
+        # distancia a una recta con dirección arbitraria [1,0] -esa
+        # convención anterior medía |y| en vez de un radio, rompiendo la
+        # simetría circular esperada justo en el caso theta=0 (ver
+        # discusión de Issue: sesgo del estimador a theta pequeño).
+        return xp.sqrt(xx**2 + yy**2)
+
+    axis_2d = axis_2d / norma
 
     # Vector normal al eje proyectado (rotación de 90°): la distancia
     # perpendicular de un punto a una recta que pasa por el origen es la
     # proyección de ese punto sobre la normal de la recta.
     normal_2d = xp.array([-axis_2d[1], axis_2d[0]])
-
-    nx, ny = shape
-    x = (xp.arange(nx) - nx // 2) * pixel_size
-    y = (xp.arange(ny) - ny // 2) * pixel_size
-    xx, yy = xp.meshgrid(x, y, indexing="ij")
 
     return xp.abs(xx * normal_2d[0] + yy * normal_2d[1])

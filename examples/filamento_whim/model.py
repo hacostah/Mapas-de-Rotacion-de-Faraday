@@ -22,6 +22,7 @@ def construir_escenario(
     rng=None,
     axis_direction=(0, 0, 1), # 2. Añadimos la dirección del eje con valor por defecto
     longitud_filamento_kpc: float | None = None,
+    campo_b: tuple | None = None,
 ):
     """
     Construye la malla 3D de campo magnético y densidad electrónica de un
@@ -39,8 +40,25 @@ def construir_escenario(
     visión solo atraviesa el perfil radial en un tramo del orden de unos
     pocos r_core, muy por debajo de la longitud total.
 
-    Pasar `longitud_filamento_kpc=None` explícitamente (o un valor >= al
-    lado de la caja) reproduce el comportamiento de cilindro infinito.
+    OJO: `longitud_filamento_kpc=None` NO da un cilindro infinito -cae al
+    default de `config.LONGITUD_FILAMENTO_KPC`, que es finito (un docstring
+    anterior de esta función decía lo contrario; era falso, `None` nunca
+    llegaba a saltarse el corte axial). Para reproducir el comportamiento
+    de cilindro infinito, pasar explícitamente `longitud_filamento_kpc=float("inf")`:
+    con L=inf, `media_longitud` es inf y la máscara tanh vale 1.0 en todo
+    punto finito, sin necesidad de una rama de código aparte.
+
+    `campo_b`: opcional, tupla `(bx, by, bz)` ya generada y normalizada a
+    `b0_microgauss` (ver `GaussianRandomVectorField.sample` +
+    `normalize_to_rms`). Si se da, se reutiliza tal cual en vez de generar
+    un campo turbulento nuevo -el campo NO depende de `axis_direction` (se
+    genera siempre en el marco de la caja, independiente de cómo se orienta
+    el filamento dentro de ella), así que en un barrido en theta con la
+    misma semilla es exactamente el mismo campo para cada ángulo. Antes
+    `run_barrido_theta.py` lo regeneraba desde cero en cada iteración del
+    barrido (misma semilla -> mismo resultado, pero recalculado ~10 veces
+    de más); pasar `campo_b` una sola vez por semilla evita ese trabajo
+    redundante.
     """
     xp = get_backend(use_gpu)
 
@@ -51,19 +69,37 @@ def construir_escenario(
     if longitud_filamento_kpc is None:
         longitud_filamento_kpc = cfg.LONGITUD_FILAMENTO_KPC
 
-    campo = GaussianRandomVectorField(
-        n=cfg.N_BASE,
-        dx=cfg.DX_BASE_KPC,
-        spectral_index=n_spec,
-        scale_min=cfg.LAMBDA_MIN_KPC,
-        scale_max=cfg.LAMBDA_MAX_KPC,
-    )
-    bx, by, bz = campo.sample(use_gpu=use_gpu, rng=rng)
-    bx, by, bz = GaussianRandomVectorField.normalize_to_rms(
-        bx, by, bz, b0_microgauss, xp=xp
-    )
+    if campo_b is not None:
+        bx, by, bz = campo_b
+        # El tamaño de malla de la densidad se toma del campo YA generado,
+        # no de `cfg.N_BASE`: así se evita un posible desajuste de forma si
+        # `cfg.N_BASE` (que pasa por `config.py`, cacheado a nivel de módulo
+        # con un `importlib.reload` que solo corre una vez por proceso, ver
+        # arriba) no coincidiera con el `N_BASE` real usado para generar
+        # `campo_b` -por ejemplo, en un test que mockea `config_fisica.N_BASE`
+        # después de que este módulo ya se importó una vez.
+        n_grid = bx.shape[0]
+    else:
+        campo = GaussianRandomVectorField(
+            n=cfg.N_BASE,
+            dx=cfg.DX_BASE_KPC,
+            spectral_index=n_spec,
+            scale_min=cfg.LAMBDA_MIN_KPC,
+            scale_max=cfg.LAMBDA_MAX_KPC,
+        )
+        bx, by, bz = campo.sample(use_gpu=use_gpu, rng=rng)
+        bx, by, bz = GaussianRandomVectorField.normalize_to_rms(
+            bx, by, bz, b0_microgauss, xp=xp
+        )
+        n_grid = cfg.N_BASE
 
-    eje = xp.linspace(-cfg.N_BASE / 2, cfg.N_BASE / 2, cfg.N_BASE) * cfg.DX_BASE_KPC
+    # Malla con paso EXACTO de cfg.DX_BASE_KPC. `linspace(-N/2, N/2, N)` (la
+    # versión anterior) da un paso real de N/(N-1)*dx, no dx -con N=128 eso
+    # es ~20.16 kpc en vez de 20, un desajuste de ~0.8% respecto al `dl` que
+    # de verdad se usa para integrar la línea de visión. `arange` con offset
+    # entero coincide además con la convención de píxel-centro que ya usa
+    # `faradaymr.simulation.geometry.projected_axis_distance` para el mapa 2D.
+    eje = (xp.arange(n_grid) - n_grid // 2) * cfg.DX_BASE_KPC
     xx, yy, zz = xp.meshgrid(eje, eje, eje, indexing="ij")
 
     # Reemplazamos la métrica esférica por la cilíndrica

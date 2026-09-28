@@ -52,7 +52,7 @@ def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
     # Semilla 1 -> anchos: [10.0, 20.0], sigma0: [5.0, 5.0]
     # Semilla 2 -> anchos: [12.0, 22.0], sigma0: [6.0, 6.0]
     # Esperamos que el promedio de anchos sea [10.0, 20.0] y sigma0 [5.0, 5.0]
-    def mock_side_effect(thetas_grados, ruta_resultados, use_gpu, n_bins, seed):
+    def mock_side_effect(thetas_grados, ruta_resultados, use_gpu, n_bins, seed, logger=None):
         desplazamiento = (seed - 1) * 2.0  # -2, 0, +2
         return {
             "theta_grados": thetas_grados,
@@ -62,6 +62,9 @@ def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
             "r_squared_gauss": np.array([0.9, 0.9]),
             "rc_beta_kpc": np.array([9.0, 19.0]) + desplazamiento,
             "r_squared_beta": np.array([0.98, 0.98]),
+            "rc_beta_fijo_kpc": np.array([9.5, 19.5]) + desplazamiento,
+            "r_squared_beta_fijo": np.array([0.97, 0.97]),
+            "p_fijo": 0.5,
         }
     
     mock_barrer.side_effect = mock_side_effect
@@ -93,3 +96,8 @@ def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
     # La agregación de la forma beta debe seguir la misma lógica que la gaussiana.
     np.testing.assert_array_equal(resultados["rc_beta_medio_kpc"], [9.0, 19.0])
     assert np.all(resultados["r_squared_beta_medio"] > resultados["r_squared_gauss_medio"] - 1e-9)
+
+    # La agregación de la forma beta con p FIJO (la comprobación de
+    # validación confiable, ver p_random_walk_cilindro) también se agrega.
+    np.testing.assert_array_equal(resultados["rc_beta_fijo_medio_kpc"], [9.5, 19.5])
+    assert resultados["p_fijo"] == 0.5

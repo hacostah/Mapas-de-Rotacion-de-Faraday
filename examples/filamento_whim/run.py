@@ -71,8 +71,12 @@ def ejecutar_corrida_angular(
 
 
 def generar_mapas_poster(use_gpu=False):
-    # Ángulos clave para visualización: Frente, Oblicuo, Lado
-    angulos_grados = [0, 15, 30]
+    # Ángulos clave para visualización: 0°=Frente, 90°=Lado, con dos pasos
+    # intermedios. (Antes se usaba [0, 15, 30]: con LONGITUD_FILAMENTO=2000
+    # kpc y r_c=300 kpc, a esos tres ángulos el filamento nunca se ve
+    # realmente "de lado" -a 30° sigue mayormente de frente-, y el comentario
+    # llamaba "Lado" a 30° por error. 90° sí es el caso de lado real.)
+    angulos_grados = [0, 30, 60, 90]
     angulos_rad = np.deg2rad(angulos_grados)
     
     # Extraemos valores para la validación geométrica

@@ -34,7 +34,13 @@ def verificar_caja_suficiente(
     dependiente del tamaño de malla, contaminando la comparación entre
     corridas.
     """
-    if not thetas_grados:
+    # `len(...) == 0` en vez de `not thetas_grados`: con un array de numpy
+    # de más de un elemento, `not array` lanza ValueError ("truth value of
+    # an array... is ambiguous"). El `__main__` actual de
+    # run_barrido_theta.py convierte a lista antes de llamar aquí, así que
+    # no se disparaba en la práctica, pero cualquier llamada directa con un
+    # array (un notebook, un test) sí lo hacía.
+    if len(thetas_grados) == 0:
         return True
 
     lado_caja_kpc = n_base * dx_base_kpc
