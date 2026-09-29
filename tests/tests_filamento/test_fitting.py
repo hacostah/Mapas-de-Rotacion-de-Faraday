@@ -151,3 +151,24 @@ def test_fit_ponderado_acepta_errores_por_bin():
     res = fit_beta_dispersion(d, perfil, rc_fijo=300.0, errores=0.01 * perfil)
     assert np.isclose(res.p, 0.8, rtol=1e-5)
     assert res.p_err > 0
+
+
+def test_chi2_reducido_solo_con_errores_y_cercano_a_uno_con_ruido_real():
+    """Sin errores por bin el chi^2 reducido no está definido (NaN). Con un
+    perfil beta más ruido gaussiano del tamaño de los errores declarados, el
+    ajuste beta da chi^2_red ~ 1 y la gaussiana (forma equivocada) uno mucho
+    mayor: es la métrica con la que se comparan ambas formas."""
+    rng = np.random.default_rng(0)
+    d = np.linspace(40, 860, 11)
+    verdadero = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    errores = 0.005 * verdadero
+    chi2_beta, chi2_gauss = [], []
+    for _ in range(200):
+        perfil = verdadero + errores * rng.standard_normal(d.size)
+        chi2_beta.append(fit_beta_dispersion(d, perfil, rc_fijo=300.0, errores=errores).chi2_red)
+        chi2_gauss.append(fit_transverse_dispersion(d, perfil, errores=errores).chi2_red)
+    assert 0.8 < np.mean(chi2_beta) < 1.2
+    assert np.mean(chi2_gauss) > 10 * np.mean(chi2_beta)
+
+    assert np.isnan(fit_beta_dispersion(d, verdadero, rc_fijo=300.0).chi2_red)
+    assert np.isnan(fit_transverse_dispersion(d, verdadero).chi2_red)

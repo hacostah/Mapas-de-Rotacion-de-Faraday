@@ -1,37 +1,14 @@
 """
-Umbral de detección de un exceso de dispersión de RM vía stacking.
+Umbral de detección de un exceso de dispersión de RM (región del filamento
+contra región de control, N fuentes cada una):
 
-Responde la pregunta que la propuesta promete ("un umbral teórico claro
-para las futuras campañas de observación profunda"): dado el sigma0 que
-predice el modelo en el eje del filamento, ¿cuántas fuentes polarizadas de
-fondo hacen falta para distinguir ese exceso del ruido? Y, al revés, con N
-fuentes, ¿cuál es el campo magnético mínimo detectable?
+    sigma_tot^2 = sigma_intr^2 + sigma_med^2
+    N >= c k^2 (sigma_tot^2 / sigma0^2)^2,     c = 4 (con control) o 2 (sin)
+    B_min = B_modelo * sqrt(k sigma_tot^2 sqrt(c/N)) / sigma0_modelo
 
-Modelo estadístico
-------------------
-Se comparan dos muestras de N fuentes cada una: detrás del filamento y en
-una región de control (así lo hace Stuardi et al. 2026 con POSSUM). La
-dispersión total por fuente es
-
-    sigma_tot^2 = sigma_intr^2 + sigma_med^2 (+ sigma0^2 detrás del filamento)
-
-con sigma_intr ≈ 7 rad/m² la dispersión intrínseca de RM de las fuentes
-extragalácticas (Stuardi et al. 2026, citando a Oppermann et al.) y
-sigma_med el error de medición de cada RM (≈12 rad/m² en POSSUM, Stuardi et
-al. 2026). Para una normal, la varianza muestral de N fuentes tiene error
-estándar sigma^2 sqrt(2/N). El exceso Δ = s_fil^2 - s_ctrl^2 tiene entonces
-error ≈ sigma_tot^2 sqrt(4/N) (dos muestras), y detectarlo a k sigma exige
-
-    sigma0^2 >= k sigma_tot^2 sqrt(c/N),   c = 4 (con control) o 2 (sin)
-    =>  N >= c k^2 (sigma_tot^2 / sigma0^2)^2.
-
-Como sigma0 ∝ B, el campo mínimo detectable con N fuentes es
-    B_min = B_modelo * sqrt(k sigma_tot^2 sqrt(c/N)) / sigma0_modelo.
-
-Es una estimación de orden de magnitud: supone RM gaussianos (el barrido
-reporta los momentos de RM/sigma_esperada para comprobarlo) y usa el sigma0 del EJE del
-filamento, así que es el caso más favorable; ignora sistemáticos como el
-foreground galáctico, que POSSUM identifica como su limitación principal.
+sigma_intr = 7 rad/m² y sigma_med = 12 rad/m² (POSSUM), de Stuardi et al.
+(2026). Supuestos: RM gaussianos por fuente, sigma0 del eje del filamento,
+sin foreground galáctico.
 """
 
 from __future__ import annotations

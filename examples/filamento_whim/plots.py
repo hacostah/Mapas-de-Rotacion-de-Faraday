@@ -8,10 +8,8 @@ y luego:
     python -m examples.filamento_whim.plots
 
 Convención: puntos = simulación Monte Carlo (perfil apilado de N semillas,
-barras = bootstrap). El valor esperado del modelo
-(`faradaymr.analysis.expected`) no se dibuja: es una validación del código,
-no un resultado, y vive en tests/tests_filamento/test_expected.py y en las
-llaves `esp_*` del .npz.
+barras = bootstrap). El perfil de ensamble (llaves `esp_*` del .npz) no se
+dibuja.
 """
 import os
 
@@ -178,10 +176,10 @@ def fig2_perfiles_transversales():
     _puntos(ax2, d, perfil, err, NARANJA, r"Simulación, $\theta=90^\circ$", "s")
     ax2.plot(x, beta_dispersion_model(x, datos["mc_sigma0"][i], rc, datos["mc_p"][i]),
              color=NARANJA, lw=1.8,
-             label=rf"Ley beta ($r_c$ fijo): $R^2={datos['mc_r2_beta'][i]:.3f}$")
+             label=rf"Ley beta ($r_c$ fijo): $\chi^2_\nu={datos['mc_chi2_beta'][i]:.2f}$")
     ax2.plot(x, gaussian_model(x, datos["mc_sigma0_gauss"][i], datos["mc_w_gauss"][i]),
              "--", color=GRIS, lw=1.6,
-             label=rf"Gaussiana: $R^2={datos['mc_r2_gauss'][i]:.3f}$")
+             label=rf"Gaussiana: $\chi^2_\nu={datos['mc_chi2_gauss'][i]:.0f}$")
     ax2.set(xlabel="Distancia transversal al eje proyectado d (kpc)",
             ylabel=r"$\sigma_{RM}(d)$ (rad m$^{-2}$)", ylim=(0, None),
             title=r"(b) Ley beta y gaussiana ajustadas al perfil a $\theta=90^\circ$")
@@ -189,6 +187,7 @@ def fig2_perfiles_transversales():
 
     _pie(fig, "Puntos: perfil apilado de las realizaciones Monte Carlo (barras: bootstrap). "
               "Líneas de color: ajuste con r_c fijo al del perfil de densidad. "
+              "χ²_ν: chi² reducido de los ajustes ponderados por los errores bootstrap. "
               + _texto_parametros(datos))
     _guardar(fig, "fig2_perfiles_transversales.png")
 
@@ -285,15 +284,17 @@ def fig5_gaussianidad_rm():
     n_total = cuentas.sum()
     asim = np.average(datos["z_asimetria"], weights=datos["hist_z"].sum(axis=1))
     curt = np.average(datos["z_exceso_curtosis"], weights=datos["hist_z"].sum(axis=1))
+    desv = np.average(datos["z_std"], weights=datos["hist_z"].sum(axis=1))
     ax.text(0.03, 0.97,
             f"media {np.average(datos['z_media'], weights=datos['hist_z'].sum(axis=1)):+.3f}\n"
+            f"desviación estándar {desv:.3f}\n"
             f"asimetría {asim:+.3f}\nexceso de curtosis {curt:+.3f}\n"
             f"{n_total:.1e} píxeles",
             transform=ax.transAxes, va="top", fontsize=9.5)
     ax.legend(loc="upper right", fontsize=9)
     _pie(fig, "Cada valor de RM se divide entre la σ_RM esperada de su línea de visión "
               "(faradaymr.analysis.expected). Referencia: una variable gaussiana de media cero "
-              "sigue N(0, 1), con media 0, asimetría 0 y exceso de curtosis 0.")
+              "sigue N(0, 1), con media 0, desviación 1, asimetría 0 y exceso de curtosis 0.")
     _guardar(fig, "fig5_gaussianidad_rm.png")
 
 

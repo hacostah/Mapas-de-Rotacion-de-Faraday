@@ -1,25 +1,15 @@
 """
-Valor ESPERADO (promedio de ensamble, sin ruido de realización) de la
-dispersión de RM de un campo turbulento gaussiano sobre una densidad dada.
-
-Para qué sirve
---------------
-Un mapa de RM simulado es UNA realización del campo turbulento: su
-dispersión medida fluctúa de semilla en semilla (varianza cósmica). Para un
-campo gaussiano, en cambio, la varianza de RM en cada línea de visión tiene
-una expresión cerrada en términos de la función de correlación del campo:
+Dispersión de RM de ensamble (promedio sobre realizaciones) de un campo
+turbulento gaussiano sobre una densidad dada:
 
     <RM^2>(x, y) = (0.812 dl)^2  sum_{a,b} n_e(x,y,a) n_e(x,y,b) C_zz(a - b)
 
-con C_zz(Δz) = <B_z(z) B_z(z+Δz)> la correlación de la componente del campo
-a lo largo de la línea de visión, que se obtiene exactamente del espectro de
-potencias que usa `GaussianRandomVectorField` (B_k = i k × A_k implica
-<|B_z,k|^2> ∝ (k_x^2 + k_y^2) |A_k|^2). Es la versión discreta y exacta de
-la fórmula de "paseo aleatorio" de Murgia et al. (2004), sin suponer que la
-longitud de correlación es mucho menor que la escala de la densidad.
+con C_zz la correlación de B_z a lo largo de la línea de visión, calculada
+del mismo espectro que usa `GaussianRandomVectorField`.
 
-Esto da la PREDICCIÓN analítica del toy model, contra la cual se valida el
-estimador Monte Carlo (tiene que converger a ella al aumentar las semillas).
+Usos: validación del Monte Carlo (test_expected.py), normalización de RM por
+píxel en el histograma del barrido y perfil de ensamble por theta (llaves
+`esp_*` del barrido).
 """
 
 from __future__ import annotations

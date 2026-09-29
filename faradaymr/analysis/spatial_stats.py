@@ -94,30 +94,12 @@ def transverse_rm_dispersion(
     resuelve la proyección del eje 3D al plano del mapa, y `radial_profile`
     resuelve el binning estadístico. Esta función solo los compone.
 
-    `footprint_mask` (opcional, ver
-    `faradaymr.simulation.geometry.sky_footprint_mask`): con un filamento de
-    longitud FINITA, los píxeles más allá de sus puntas proyectadas sobre el
-    cielo tienen RM≈0 en toda su línea de visión. Sin excluirlos, se mezclan
-    en los mismos bins de distancia que los píxeles que sí atraviesan el
-    filamento y diluyen el `std` medido -tanto más cuanto más corta es la
-    huella proyectada (peor a theta chico). Se deja como parámetro opcional
-    (en vez de calcularlo siempre adentro) porque requeriría la densidad 3D
-    `ne`, que esta función no recibe; quien la llama la construye una sola
-    vez con `sky_footprint_mask(ne)` y la pasa aquí.
+    `footprint_mask` (opcional, de `sky_footprint_mask(ne)`): excluye los
+    píxeles cuya línea de visión no atraviesa el filamento finito.
 
-    `statistic` (por defecto "rms"): la dispersión se mide respecto de CERO,
-    sqrt(<RM^2>), no respecto de la media del bin (np.std). Un campo
-    turbulento tiene <RM> = 0 por construcción (y en una observación, tras
-    restar el foreground galáctico), así que <RM^2> sobre los píxeles de un
-    bin es un estimador INSESGADO de la varianza verdadera sigma_RM^2,
-    sin importar cuán correlacionados estén los píxeles. `np.std`, en
-    cambio, resta la media muestral del bin: cuando el bin cabe dentro de
-    una longitud de correlación del campo (el disco central a theta=0, o las
-    tiras angostas a theta chico), esa media se "come" buena parte de la
-    varianza. Con la configuración anterior del proyecto eso subestimaba
-    sigma0 hasta un 20% a theta chico e inflaba 16% el ancho a theta=0,
-    creando un "bache" espurio en la curva ancho-vs-theta. Se deja
-    `statistic="std"` disponible para reproducir el comportamiento viejo.
+    `statistic` (por defecto "rms"): dispersión respecto de cero,
+    sqrt(<RM^2>), insesgada porque <RM> = 0. "std" resta la media del bin
+    (comportamiento anterior).
     """
     if xp is None:
         xp = backend_de(rm_map)

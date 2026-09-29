@@ -10,36 +10,12 @@ def verificar_caja_suficiente(
     logger=None,
 ) -> bool:
     """
-    Verifica que la caja cúbica sea suficientemente profunda a lo largo de
-    la línea de visión (siempre el eje z de la caja: `model.py` rota el
-    OBJETO, no la línea de visión) para contener la proyección del
-    filamento finito de longitud `longitud_filamento_kpc`.
-
-    Nota de corrección física (versión anterior de esta función): un
-    segmento de longitud L centrado en el origen, con su eje inclinado un
-    ángulo theta respecto a z, tiene una extensión a lo largo de z de
-    `L * |cos(theta)|` -no `L / cos(theta)`. El peor caso (mayor
-    profundidad requerida) ocurre entonces en theta CERCANO A 0° (el
-    filamento visto "de frente", casi paralelo a la línea de visión, donde
-    cos(theta) es máximo), no cerca de 90° como asumía la versión anterior
-    de este chequeo. A theta=90° (filamento "de lado") la profundidad
-    requerida es ~0: la línea de visión solo atraviesa el perfil radial
-    transversal, sobre una escala de unos pocos radios de núcleo, muy por
-    debajo de la longitud total del filamento.
-
-    Esto importa en la práctica porque `construir_escenario` (ver
-    `model.py`) trunca la densidad más allá de +/- longitud/2 a lo largo
-    del eje del filamento; si la caja es más angosta que esa proyección,
-    la simulación además corta el filamento en la línea de visión de forma
-    dependiente del tamaño de malla, contaminando la comparación entre
-    corridas.
+    Verifica que la caja contenga, a lo largo de la línea de visión (eje z),
+    la proyección del filamento de longitud L: L |cos(theta)| <= N dx. El
+    peor caso es theta = 0°. Devuelve False (y avisa) si no alcanza.
     """
-    # `len(...) == 0` en vez de `not thetas_grados`: con un array de numpy
-    # de más de un elemento, `not array` lanza ValueError ("truth value of
-    # an array... is ambiguous"). El `__main__` actual de
-    # run_barrido_theta.py convierte a lista antes de llamar aquí, así que
-    # no se disparaba en la práctica, pero cualquier llamada directa con un
-    # array (un notebook, un test) sí lo hacía.
+
+    # len() en vez de `not`: acepta listas y arrays de numpy.
     if len(thetas_grados) == 0:
         return True
 
@@ -94,20 +70,12 @@ def verificar_profundidad_radial(
     logger=None,
 ) -> bool:
     """
-    Complemento de `verificar_caja_suficiente`: aquella comprueba que quepa
-    la LONGITUD del filamento; esta comprueba que quepa su COLA RADIAL.
-
-    Con el filamento de lado, la línea de visión de un píxel a distancia d
-    del eje atraviesa el perfil beta a radios sqrt(d^2 + l^2). Si la caja
-    corta esa integral en |l| = N*dx/2, la varianza de RM en los bins
-    exteriores sale subestimada y el perfil transversal queda más empinado
-    de lo que es (p ajustado mayor que el valor analítico). Ocurre solo en
-    las vistas oblicuas/laterales, así que además sesga la comparación entre
-    ángulos.
-
-    Devuelve False (y avisa) si en `dist_max_ajuste_kpc` se pierde más de
-    `tolerancia` de la varianza.
+    Verifica que la caja contenga la cola radial del perfil a lo largo de la
+    línea de visión (vista lateral): la fracción de la varianza de RM
+    retenida en d = `dist_max_ajuste_kpc` debe ser >= 1 - `tolerancia`.
+    Devuelve False (y avisa) si no.
     """
+
     semiprofundidad = n_base * dx_base_kpc / 2.0
     retenida = fraccion_varianza_retenida(
         dist_max_ajuste_kpc, semiprofundidad, r_core_kpc, beta

@@ -1,25 +1,24 @@
 """
-Barrido en ángulo de visión theta del filamento WHIM (resultado central del
-Proyecto II).
+Barrido en ángulo de visión theta del filamento WHIM (Proyecto II).
 
 Qué hace
 --------
 1. Para cada theta construye la densidad del filamento finito y calcula:
    - la máscara del cuerpo del filamento sobre el cielo,
-   - el perfil transversal ESPERADO sigma_RM(d) (analítico, sin ruido; ver
-     `faradaymr.analysis.expected`), que es la predicción del toy model.
+   - el perfil transversal de ensamble sigma_RM(d) (sin ruido de
+     realización; `faradaymr.analysis.expected`).
 2. Para cada semilla genera UN campo turbulento (no depende de theta) y mide
-   el perfil sigma_RM(d) de cada mapa simulado con el estimador RMS
-   (insesgado, ver `transverse_rm_dispersion`).
+   el perfil sigma_RM(d) de cada mapa simulado con el estimador RMS.
 3. Apila las semillas (promedio de RM^2 por bin), ajusta el perfil apilado y
    estima errores con bootstrap sobre semillas. También guarda la dispersión
-   de UNA sola realización (lo que vería un observador con un filamento).
+   de los ajustes de UNA sola realización.
 
-Ajustes por theta (tanto al perfil simulado como al esperado):
-- forma beta con r_c fijo (modo principal): sigma0(theta), p(theta) y el
-  semiancho a media altura d_1/2(theta);
-- forma beta libre (comprobación: r_c tiene que salir ~ RC);
-- gaussiana (la hipótesis original de la propuesta, para comparar su R^2).
+Ajustes por theta (al perfil simulado, `mc_*`, y al de ensamble, `esp_*`):
+- forma beta con r_c fijo: sigma0(theta), p(theta) y d_1/2(theta);
+- forma beta libre: (sigma0, r_c, p);
+- gaussiana: (sigma0, ancho).
+Bondad de ajuste: chi^2 reducido ponderado por los errores bootstrap
+(`mc_chi2_beta`, `mc_chi2_gauss`) y R^2 sin pesos.
 
 Uso (desde la raíz del repo):
     python -m examples.filamento_whim.run_barrido_theta
@@ -64,7 +63,7 @@ from faradaymr.simulation.geometry import (
 
 _logger_modulo = logging.getLogger("faradaymr.filamento_whim.barrido")
 
-# Histograma de RM/sigma_esperada (para verificar que RM es gaussiano).
+# Bordes del histograma de RM / sigma de ensamble por píxel.
 BORDES_HIST_Z = np.linspace(-5.0, 5.0, 51)
 
 
@@ -149,8 +148,10 @@ def _ajustes(centros, perfil, rc_kpc, errores=None):
     return dict(
         sigma0=b.sigma0, sigma0_err=b.sigma0_err, p=b.p, p_err=b.p_err,
         hwhm=semiancho_media_altura(rc_kpc, b.p), r2_beta=b.r_squared,
+        chi2_beta=b.chi2_red,
         rc_libre=libre.r_c, p_libre=libre.p, r2_libre=libre.r_squared,
         w_gauss=g.width, sigma0_gauss=g.sigma0, r2_gauss=g.r_squared,
+        chi2_gauss=g.chi2_red,
     )
 
 
@@ -316,20 +317,19 @@ def barrer_angulos_monte_carlo(
     for t, th in enumerate(thetas_grados):
         logger.info(
             "theta=%4.1f°: sigma0=%.4f±%.4f (esp %.4f) rad/m2 | p=%.3f±%.3f "
-            "(esp %.3f) | d_1/2=%.0f kpc | R2 beta=%.3f gauss=%.3f",
+            "(esp %.3f) | d_1/2=%.0f kpc | chi2_red beta=%.2f gauss=%.1f",
             th, resultados["mc_sigma0"][t], resultados["mc_sigma0_err"][t],
             resultados["esp_sigma0"][t], resultados["mc_p"][t],
             resultados["mc_p_err"][t], resultados["esp_p"][t],
-            resultados["mc_hwhm"][t], resultados["mc_r2_beta"][t],
-            resultados["mc_r2_gauss"][t],
+            resultados["mc_hwhm"][t], resultados["mc_chi2_beta"][t],
+            resultados["mc_chi2_gauss"][t],
         )
     return resultados
 
 
 def _campo_bz(generador, semilla, b0_ug, xp):
-    """B_z de la realización `semilla`, normalizada a <B^2> = B0^2. Es el
-    único componente que entra en RM (la LoS es el eje z de la caja) y no
-    depende de theta: se genera una vez por semilla para todo el barrido."""
+    """B_z de la realización `semilla`, normalizada a <B^2> = B0^2. Se genera
+    una vez por semilla (no depende de theta)."""
     bx, by, bz = generador.sample(
         use_gpu=(xp is not np), rng=np.random.RandomState(semilla)
     )

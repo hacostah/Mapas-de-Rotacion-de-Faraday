@@ -20,10 +20,21 @@ def _errores_validos(errores, valido):
     return errores
 
 
+def _chi2_reducido(sigma_v, prediccion, errores_v, n_parametros):
+    """
+    Chi^2 reducido, sum(((dato - modelo) / error)^2) / (N - n_par). NaN si
+    no hay errores por bin. Es la métrica coherente con un ajuste ponderado
+    (el R^2 de este módulo es sin pesos).
+    """
+    grados_libertad = sigma_v.size - n_parametros
+    if errores_v is None or grados_libertad <= 0:
+        return float("nan")
+    return float(np.sum(((sigma_v - prediccion) / errores_v) ** 2) / grados_libertad)
+
+
 def gaussian_model(d: np.ndarray | float, sigma0: float, width: float) -> np.ndarray | float:
     """
-    Forma funcional esperada para la dispersión transversal de RM asumiendo
-    una caída idealizada: sigma_RM(d) = sigma0 * exp(-d^2 / (2*width^2)).
+    Forma gaussiana: sigma_RM(d) = sigma0 * exp(-d^2 / (2*width^2)).
 
     Parámetros
     ----------
@@ -32,8 +43,7 @@ def gaussian_model(d: np.ndarray | float, sigma0: float, width: float) -> np.nda
     sigma0 : float
         Dispersión de RM máxima sobre el eje del filamento (d=0).
     width : float
-        Escala característica de caída. Define el "umbral teórico" de la 
-        firma observacional del filamento.
+        Escala característica de caída.
     """
     return sigma0 * np.exp(-(d**2) / (2.0 * width**2))
 
@@ -44,6 +54,7 @@ class GaussianFitResult:
     sigma0_err: float
     width_err: float
     r_squared: float
+    chi2_red: float = float("nan")
 
 def fit_transverse_dispersion(
     centros: np.ndarray,
@@ -71,7 +82,10 @@ def fit_transverse_dispersion(
     Retorna
     -------
     GaussianFitResult
-        Objeto con los parámetros ajustados, sus errores y la bondad del ajuste (R^2).
+        Objeto con los parámetros ajustados, sus errores y la bondad del
+        ajuste: R^2 (sin pesos) y, si se dieron `errores`, chi^2 reducido.
+        Para comparar formas funcionales tras un ajuste ponderado, usar
+        `chi2_red`, no `r_squared`.
     """
     if hasattr(centros, 'get'):
         centros = centros.get()
@@ -128,6 +142,7 @@ def fit_transverse_dispersion(
         sigma0_err=float(errores[0]),
         width_err=float(errores[1]),
         r_squared=float(r_cuadrado),
+        chi2_red=_chi2_reducido(sigma_v, prediccion, sigma_err_v, 2),
     )
 
 
@@ -135,27 +150,14 @@ def beta_dispersion_model(
     d: np.ndarray | float, sigma0: float, r_c: float, p: float
 ) -> np.ndarray | float:
     """
-    Forma funcional alternativa a `gaussian_model`, derivada del propio
-    perfil beta de densidad usado para construir el filamento
-    (`ne(r) = n0 (1 + r^2/r_c^2)^(-3*beta/2)`, ver
-    `examples/filamento_whim/config_fisica.py`).
-
-    Para un cilindro con ese perfil, sigma_RM(d) ~ sqrt(integral ne^2 dl)
-    es también una potencia de (1 + d^2/r_c^2); a diferencia de la
-    gaussiana (que decae como exp(-d^2), mucho más rápido en las colas),
-    esta forma tiene colas que decaen como una ley de potencia. Qué forma
-    describe mejor un perfil dado se decide comparando el R^2 de
-    `fit_beta_dispersion` y `fit_transverse_dispersion`.
+    Forma tipo beta: sigma_RM(d) = sigma0 * (1 + d^2/r_c^2)^(-p).
 
     Parámetros
     ----------
     d : distancia transversal al eje.
     sigma0 : dispersión de RM en el eje (d=0).
     r_c : escala característica de caída (análoga al radio de núcleo).
-    p : índice de la caída. Para un campo de paseo aleatorio sobre un perfil
-        beta vale 3β/2 visto de frente y (3β-1/2)/2 visto de lado (ver
-        `p_vista_frontal` / `p_vista_lateral`); en ángulos intermedios pasa
-        de uno a otro.
+    p : índice de la caída (límites en `p_vista_frontal` / `p_vista_lateral`).
     """
     return sigma0 * (1.0 + (d**2) / (r_c**2)) ** (-p)
 
@@ -169,26 +171,20 @@ class BetaFitResult:
     r_c_err: float
     p_err: float
     r_squared: float
+    chi2_red: float = float("nan")
 
 
 def p_vista_lateral(beta: float) -> float:
     """
-    Exponente p de `beta_dispersion_model` para el filamento visto DE LADO
-    (theta = 90°): sigma_RM^2(d) ∝ integral n_e^2 dl a lo largo de una recta
-    perpendicular al eje, que para un perfil beta da (1+d^2/r_c^2)^(-3β+1/2),
-    así que p = (3β - 1/2)/2. Es la misma cuenta que el brillo en rayos X de
-    un perfil beta y que el sigma_RM de un cúmulo en Murgia et al. (2004).
-    beta = 2/3 -> p = 0.75.
+    Límite de paseo aleatorio de p a theta = 90°: p = (3β - 1/2)/2
+    (Murgia et al. 2004).
     """
     return (3.0 * beta - 0.5) / 2.0
 
 
 def p_vista_frontal(beta: float) -> float:
     """
-    Exponente p para el filamento visto DE FRENTE (theta = 0°, eje paralelo
-    a la línea de visión): cada línea de visión recorre el filamento a radio
-    CONSTANTE d, así que sigma_RM(d) ∝ n_e(d) sqrt(Λ L) ∝ (1+d^2/r_c^2)^(-3β/2),
-    es decir p = 3β/2. beta = 2/3 -> p = 1.
+    Límite de paseo aleatorio de p a theta = 0°: p = 3β/2.
     """
     return 1.5 * beta
 
@@ -200,10 +196,8 @@ def p_random_walk_cilindro(beta: float) -> float:
 
 def semiancho_media_altura(r_c: float, p: float) -> float:
     """
-    Semiancho a media altura (HWHM) del perfil sigma0 (1+d^2/r_c^2)^(-p):
-    la distancia al eje donde sigma_RM cae a la mitad de su valor en el eje,
-    d_1/2 = r_c sqrt(2^(1/p) - 1). Es el "ancho aparente" del filamento en
-    el mapa de dispersión de RM, independiente de la forma funcional usada.
+    Semiancho a media altura del perfil sigma0 (1+d^2/r_c^2)^(-p):
+    d_1/2 = r_c sqrt(2^(1/p) - 1).
     """
     return float(r_c * np.sqrt(2.0 ** (1.0 / p) - 1.0))
 
@@ -223,17 +217,13 @@ def fit_beta_dispersion(
     perfil.
 
     Modos (a lo más uno de `p_fijo`/`rc_fijo`):
-    - libre: (sigma0, r_c, p). r_c y p están bastante correlacionados en una
-      ventana de pocos r_c; útil como comprobación, no como observable.
-    - `rc_fijo`: ajusta (sigma0, p) con r_c conocido (en una observación
-      real, del perfil de rayos X/SZ del mismo filamento). Es el modo
-      PRINCIPAL del proyecto: el exponente p(theta) pasa de `p_vista_frontal`
-      a `p_vista_lateral` y es la firma angular más limpia del modelo.
-    - `p_fijo`: ajusta (sigma0, r_c) con p conocido; solo tiene sentido a
-      theta=90° (p = `p_vista_lateral`) o theta=0° (p = `p_vista_frontal`).
+    - libre: (sigma0, r_c, p).
+    - `rc_fijo`: (sigma0, p) con r_c dado. Modo principal del barrido.
+    - `p_fijo`: (sigma0, r_c) con p dado.
 
     Los parámetros fijos se devuelven con error 0.0.
-    `errores`: incertidumbre por bin para un ajuste ponderado.
+    `errores`: incertidumbre por bin para un ajuste ponderado. En ese caso
+    `chi2_red` es la métrica de bondad de ajuste (`r_squared` es sin pesos).
     """
     if p_fijo is not None and rc_fijo is not None:
         raise ValueError("Se puede fijar p o r_c, no ambos.")
@@ -302,4 +292,5 @@ def fit_beta_dispersion(
         r_c_err=float(r_c_err),
         p_err=float(p_err),
         r_squared=float(r_cuadrado),
+        chi2_red=_chi2_reducido(sigma_v, prediccion, err_v, n_libres),
     )

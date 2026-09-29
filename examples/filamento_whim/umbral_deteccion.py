@@ -1,21 +1,19 @@
 """
-Umbral teórico de detección del filamento WHIM (lo que promete la
-propuesta): a partir del sigma0(theta) del barrido Monte Carlo, calcula
+Umbral teórico de detección del filamento WHIM: a partir del sigma0(theta)
+del barrido Monte Carlo, calcula
 
 1. cuántas fuentes de fondo hacen falta para detectar el filamento a 3 sigma,
    en dos escenarios de ruido por fuente:
    - "POSSUM": dispersión intrínseca 7 rad/m² + error de medición 12 rad/m²
      (Stuardi et al. 2026);
-   - "intrínseco": solo los 7 rad/m² intrínsecos (error de medición
-     despreciable; el límite optimista de un RM-grid profundo tipo SKA);
+   - "intrínseco": solo los 7 rad/m² intrínsecos (error de medición cero);
 2. el campo magnético mínimo detectable en función del número de fuentes.
 
 Uso, desde la raíz del repo y después de `run_barrido_theta.py`:
 
     python -m examples.filamento_whim.umbral_deteccion
 
-Escribe results/umbral_deteccion.txt (los números del reporte se calculan,
-no están escritos a mano).
+Escribe results/umbral_deteccion.txt.
 """
 from __future__ import annotations
 
