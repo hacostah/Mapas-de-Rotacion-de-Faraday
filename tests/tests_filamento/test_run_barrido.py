@@ -1,103 +1,80 @@
 import os
 import tempfile
-import numpy as np
 from unittest import mock
+
 import astropy.units as u
+import numpy as np
 
-from examples.filamento_whim.run_barrido_theta import barrer_angulos
+from examples.filamento_whim.run_barrido_theta import (
+    analizar_perfiles,
+    barrer_angulos,
+    barrer_angulos_monte_carlo,
+)
+from faradaymr.analysis.fitting import beta_dispersion_model
 
-@mock.patch('examples.filamento_whim.config_fisica.N_BASE', 32)
-@mock.patch('examples.filamento_whim.config_fisica.LONGITUD_FILAMENTO', 300.0 * u.kpc)
+_PARCHES = [
+    mock.patch("examples.filamento_whim.config_fisica.N_BASE", 32),
+    mock.patch("examples.filamento_whim.config_fisica.DX_BASE", 25.0 * u.kpc),
+    mock.patch("examples.filamento_whim.config_fisica.RC", 60.0 * u.kpc),
+    mock.patch("examples.filamento_whim.config_fisica.LONGITUD_FILAMENTO", 300.0 * u.kpc),
+    mock.patch("examples.filamento_whim.config_fisica.DIST_MAX_AJUSTE", 180.0 * u.kpc),
+    mock.patch("examples.filamento_whim.config_fisica.LAMBDA_MAX", 100.0 * u.kpc),
+]
+
+
+def _con_parches(funcion):
+    for parche in reversed(_PARCHES):
+        funcion = parche(funcion)
+    return funcion
+
+
+@_con_parches
 def test_barrido_theta_smoke():
-    """
-    Test de humo para el barrido.
-    Utiliza una malla pequeña (N_BASE=32) y un filamento muy corto para
-    que la validación geométrica pase y el test corra rápido en CPU.
-    """
-    thetas_prueba = [0, 45]
-    
+    """Malla chica (32^3) y filamento corto: el barrido corre de punta a punta,
+    devuelve todas las llaves que usan plots.py/umbral_deteccion.py y se
+    puede guardar como .npz."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        resultados = barrer_angulos(
-            thetas_grados=thetas_prueba,
-            ruta_resultados=temp_dir,
-            use_gpu=False,
-            n_bins=5,  # Menos bins porque la malla es más chica
-            seed=42
+        res = barrer_angulos_monte_carlo(
+            [0, 45, 90], temp_dir, n_semillas=3, use_gpu=False, n_bins=6, n_bootstrap=20,
         )
-        
-        # Validar salidas
-        assert "theta_grados" in resultados
-        assert "width_kpc" in resultados
-        assert "width_err_kpc" in resultados
-        assert "sigma0" in resultados
-        
-        assert len(resultados["theta_grados"]) == 2
-        assert len(resultados["width_kpc"]) == 2
-        
-        # Verificar que el npz se puede guardar
-        archivo_salida = os.path.join(temp_dir, "test_salida.npz")
-        np.savez(archivo_salida, **resultados)
-        assert os.path.exists(archivo_salida)
+        for llave in ["theta_grados", "centros_kpc", "perfil_apilado", "perfil_apilado_err",
+                      "perfil_esperado", "mc_sigma0", "mc_sigma0_err", "mc_p", "mc_p_err",
+                      "mc_hwhm", "esp_p", "esp_sigma0", "mc_w_gauss", "hist_z",
+                      "una_realizacion_sigma0_std", "p_frontal", "p_lateral"]:
+            assert llave in res, llave
+        assert res["perfiles_rms"].shape == (3, 3, 5)
+        assert np.all(np.isfinite(res["mc_sigma0"]))
+        # La dispersión cae al alejarse del eje en el perfil esperado.
+        assert np.all(res["perfil_esperado"][:, 0] > res["perfil_esperado"][:, -1])
+        archivo = os.path.join(temp_dir, "salida.npz")
+        np.savez(archivo, **res)
+        assert os.path.exists(archivo)
 
-@mock.patch('examples.filamento_whim.run_barrido_theta.barrer_angulos')
-def test_barrer_angulos_monte_carlo_agregacion(mock_barrer):
-    """
-    Verifica que la capa Monte Carlo orqueste el número correcto de semillas
-    y agregue correctamente los arrays (mean y std), sin ejecutar la física real.
-    """
-    from examples.filamento_whim.run_barrido_theta import barrer_angulos_monte_carlo
 
-    # 1. Configuramos el mock para que devuelva datos falsos predecibles según la semilla.
-    # Semilla 0 -> anchos: [8.0, 18.0], sigma0: [4.0, 4.0]
-    # Semilla 1 -> anchos: [10.0, 20.0], sigma0: [5.0, 5.0]
-    # Semilla 2 -> anchos: [12.0, 22.0], sigma0: [6.0, 6.0]
-    # Esperamos que el promedio de anchos sea [10.0, 20.0] y sigma0 [5.0, 5.0]
-    def mock_side_effect(thetas_grados, ruta_resultados, use_gpu, n_bins, seed, logger=None):
-        desplazamiento = (seed - 1) * 2.0  # -2, 0, +2
-        return {
-            "theta_grados": thetas_grados,
-            "width_kpc": np.array([10.0, 20.0]) + desplazamiento,
-            "width_err_kpc": np.array([1.0, 1.0]),  # No se usa en la agregación
-            "sigma0": np.array([5.0, 5.0]) + (seed - 1) * 1.0,
-            "r_squared_gauss": np.array([0.9, 0.9]),
-            "rc_beta_kpc": np.array([9.0, 19.0]) + desplazamiento,
-            "r_squared_beta": np.array([0.98, 0.98]),
-            "rc_beta_fijo_kpc": np.array([9.5, 19.5]) + desplazamiento,
-            "r_squared_beta_fijo": np.array([0.97, 0.97]),
-            "p_fijo": 0.5,
-        }
-    
-    mock_barrer.side_effect = mock_side_effect
+@_con_parches
+def test_barrer_angulos_una_semilla_no_tiene_errores_bootstrap():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        res = barrer_angulos([0, 90], temp_dir, use_gpu=False, n_bins=6, seed=7)
+    assert res["perfiles_rms"].shape[0] == 1
+    assert np.all(np.isnan(res["mc_sigma0_err"]))
 
-    # 2. Ejecutamos la función Monte Carlo
-    thetas_prueba = [0, 45]
-    n_semillas = 3
-    
-    resultados = barrer_angulos_monte_carlo(
-        thetas_grados=thetas_prueba,
-        ruta_resultados="ruta_falsa",
-        n_semillas=n_semillas,
-        use_gpu=False
-    )
 
-    # 3. Verificamos el comportamiento del orquestador
-    assert mock_barrer.call_count == n_semillas, "No se llamó a la función el número correcto de veces"
-    
-    # 4. Verificamos la agregación matemática (mean y std)
-    np.testing.assert_array_equal(resultados["width_medio_kpc"], [10.0, 20.0])
-    np.testing.assert_array_equal(resultados["sigma0_medio"], [5.0, 5.0])
-    
-    # La desviación estándar poblacional de [-2, 0, 2] es sqrt(8/3) ≈ 1.63299
-    # Para los anchos la std debería ser > 0
-    assert np.all(resultados["width_std_kpc"] > 0)
-    assert np.all(resultados["sigma0_std"] > 0)
-    assert resultados["width_medio_kpc"].shape == (2,)
+def test_analizar_perfiles_recupera_p_de_perfiles_sinteticos():
+    """Sin física: perfiles beta sintéticos con ruido multiplicativo pequeño.
+    El apilado + ajuste con r_c fijo debe recuperar p y sigma0, y el bootstrap
+    debe dar errores finitos y chicos."""
+    rng = np.random.default_rng(0)
+    centros = np.linspace(40, 860, 11)
+    rc = 300.0
+    p_verdad = np.array([1.0, 0.75])
+    esperados = np.array([beta_dispersion_model(centros, 0.05, rc, p) for p in p_verdad])
+    perfiles = esperados[None] * (1 + 0.05 * rng.standard_normal((40, 2, 11)))
 
-    # La agregación de la forma beta debe seguir la misma lógica que la gaussiana.
-    np.testing.assert_array_equal(resultados["rc_beta_medio_kpc"], [9.0, 19.0])
-    assert np.all(resultados["r_squared_beta_medio"] > resultados["r_squared_gauss_medio"] - 1e-9)
+    res = analizar_perfiles(perfiles, centros, esperados, rc, n_bootstrap=50)
 
-    # La agregación de la forma beta con p FIJO (la comprobación de
-    # validación confiable, ver p_random_walk_cilindro) también se agrega.
-    np.testing.assert_array_equal(resultados["rc_beta_fijo_medio_kpc"], [9.5, 19.5])
-    assert resultados["p_fijo"] == 0.5
+    np.testing.assert_allclose(res["esp_p"], p_verdad, rtol=1e-4)
+    np.testing.assert_allclose(res["mc_p"], p_verdad, rtol=0.03)
+    np.testing.assert_allclose(res["mc_sigma0"], 0.05, rtol=0.03)
+    assert np.all(np.isfinite(res["mc_p_err"])) and np.all(res["mc_p_err"] < 0.05)
+    # El HWHM es mayor para el perfil más plano (vista lateral).
+    assert res["esp_hwhm"][1] > res["esp_hwhm"][0]

@@ -112,3 +112,42 @@ def test_fit_beta_error_pocos_puntos_con_p_fijo():
 
     with pytest.raises(ValueError, match="No hay suficientes bins válidos"):
         fit_beta_dispersion(centros, sigma_rm, p_fijo=0.5)
+
+def test_p_vista_frontal_y_lateral_para_beta_dos_tercios():
+    from faradaymr.analysis.fitting import p_vista_frontal, p_vista_lateral
+    # beta = 2/3 (Tanimura et al. 2020): p = 1 de frente y 0.75 de lado.
+    assert np.isclose(p_vista_frontal(2 / 3), 1.0)
+    assert np.isclose(p_vista_lateral(2 / 3), 0.75)
+
+
+def test_fit_beta_rc_fijo_recupera_p():
+    from faradaymr.analysis.fitting import beta_dispersion_model, fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    perfil = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    res = fit_beta_dispersion(d, perfil, rc_fijo=300.0)
+    assert np.isclose(res.p, 0.8, rtol=1e-5)
+    assert np.isclose(res.sigma0, 0.03, rtol=1e-5)
+    assert res.r_c == 300.0 and res.r_c_err == 0.0
+
+
+def test_fit_beta_no_permite_fijar_p_y_rc_a_la_vez():
+    from faradaymr.analysis.fitting import fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    with pytest.raises(ValueError):
+        fit_beta_dispersion(d, np.exp(-d / 300), p_fijo=0.5, rc_fijo=300.0)
+
+
+def test_semiancho_media_altura_es_donde_el_perfil_cae_a_la_mitad():
+    from faradaymr.analysis.fitting import beta_dispersion_model, semiancho_media_altura
+    for p in [0.5, 0.75, 1.0]:
+        d12 = semiancho_media_altura(300.0, p)
+        assert np.isclose(beta_dispersion_model(d12, 1.0, 300.0, p), 0.5)
+
+
+def test_fit_ponderado_acepta_errores_por_bin():
+    from faradaymr.analysis.fitting import beta_dispersion_model, fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    perfil = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    res = fit_beta_dispersion(d, perfil, rc_fijo=300.0, errores=0.01 * perfil)
+    assert np.isclose(res.p, 0.8, rtol=1e-5)
+    assert res.p_err > 0

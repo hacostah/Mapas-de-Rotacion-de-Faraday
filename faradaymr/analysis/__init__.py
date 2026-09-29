@@ -8,8 +8,21 @@ from .fitting import (
     fit_beta_dispersion,
     BetaFitResult,
     p_random_walk_cilindro,
+    p_vista_lateral,
+    p_vista_frontal,
+    semiancho_media_altura,
 )
-from .deteccion import n_fuentes_necesarias, resumen_umbral_deteccion
+from .expected import (
+    los_correlation_bz,
+    longitud_correlacion_los,
+    expected_rm_dispersion_map,
+)
+from .deteccion import (
+    n_fuentes_necesarias,
+    resumen_umbral_deteccion,
+    sigma0_minimo_detectable,
+    campo_minimo_detectable,
+)
 
 __all__ = [
     "estimate_rm_lsq",
@@ -22,6 +35,14 @@ __all__ = [
     "fit_beta_dispersion",
     "BetaFitResult",
     "p_random_walk_cilindro",
+    "p_vista_lateral",
+    "p_vista_frontal",
+    "semiancho_media_altura",
+    "los_correlation_bz",
+    "longitud_correlacion_los",
+    "expected_rm_dispersion_map",
     "n_fuentes_necesarias",
     "resumen_umbral_deteccion",
+    "sigma0_minimo_detectable",
+    "campo_minimo_detectable",
 ]

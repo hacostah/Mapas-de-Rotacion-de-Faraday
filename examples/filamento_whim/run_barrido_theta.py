@@ -1,347 +1,358 @@
+"""
+Barrido en ángulo de visión theta del filamento WHIM (resultado central del
+Proyecto II).
+
+Qué hace
+--------
+1. Para cada theta construye la densidad del filamento finito y calcula:
+   - la máscara del cuerpo del filamento sobre el cielo,
+   - el perfil transversal ESPERADO sigma_RM(d) (analítico, sin ruido; ver
+     `faradaymr.analysis.expected`), que es la predicción del toy model.
+2. Para cada semilla genera UN campo turbulento (no depende de theta) y mide
+   el perfil sigma_RM(d) de cada mapa simulado con el estimador RMS
+   (insesgado, ver `transverse_rm_dispersion`).
+3. Apila las semillas (promedio de RM^2 por bin), ajusta el perfil apilado y
+   estima errores con bootstrap sobre semillas. También guarda la dispersión
+   de UNA sola realización (lo que vería un observador con un filamento).
+
+Ajustes por theta (tanto al perfil simulado como al esperado):
+- forma beta con r_c fijo (modo principal): sigma0(theta), p(theta) y el
+  semiancho a media altura d_1/2(theta);
+- forma beta libre (comprobación: r_c tiene que salir ~ RC);
+- gaussiana (la hipótesis original de la propuesta, para comparar su R^2).
+
+Uso (desde la raíz del repo):
+    python -m examples.filamento_whim.run_barrido_theta
+"""
 from __future__ import annotations
 
-import os
-import numpy as np
-import astropy.units as u
 import logging
+import os
 
-# Importaciones del proyecto (rutas relativas a examples/filamento_whim)
-from examples.filamento_whim.model import construir_escenario
-from examples.filamento_whim import config
+import astropy.units as u
+import numpy as np
+
 from examples.filamento_whim import config_fisica
-from examples.filamento_whim.validacion import verificar_caja_suficiente
-
-# Importaciones del framework faradaymr
-from faradaymr import ObservationConfig, ObservationPipeline, get_backend
-from faradaymr.fields import GaussianRandomVectorField
-from faradaymr.simulation.geometry import sky_footprint_mask, filament_body_mask
-from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
-from faradaymr.analysis.fitting import (
-    fit_transverse_dispersion,
-    fit_beta_dispersion,
-    p_random_walk_cilindro,
+from examples.filamento_whim.model import construir_escenario
+from examples.filamento_whim.validacion import (
+    verificar_caja_suficiente,
+    verificar_profundidad_radial,
 )
+from faradaymr import BetaModel, get_backend
+from faradaymr.analysis.expected import (
+    expected_rm_dispersion_map,
+    longitud_correlacion_los,
+)
+from faradaymr.analysis.fitting import (
+    fit_beta_dispersion,
+    fit_transverse_dispersion,
+    p_vista_frontal,
+    p_vista_lateral,
+    semiancho_media_altura,
+)
+from faradaymr.analysis.spatial_stats import radial_profile, transverse_rm_dispersion
+from faradaymr.backend import to_numpy
+from faradaymr.fields import GaussianRandomVectorField
 from faradaymr.logging_config import configurar_logging
+from faradaymr.los import rotation_measure
+from faradaymr.simulation.geometry import (
+    filament_axis_from_viewing_angle,
+    filament_body_mask,
+    projected_axis_distance,
+    sky_footprint_mask,
+)
 
-# Logger de este módulo, colgado del árbol "faradaymr" (en vez de
-# `logging.getLogger(__name__)`, que quedaba fuera de esa jerarquía y no
-# tenía handlers propios): así sus mensajes salen por los mismos handlers
-# (consola + archivo) que configura `configurar_logging`, en vez de perderse
-# en silencio -antes ningún `.info(...)` de este módulo llegaba a verse.
 _logger_modulo = logging.getLogger("faradaymr.filamento_whim.barrido")
 
+# Histograma de RM/sigma_esperada (para verificar que RM es gaussiano).
+BORDES_HIST_Z = np.linspace(-5.0, 5.0, 51)
 
-def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=True, n_bins=None, seed=0, logger=None):
-    """
-    Corre un barrido en ángulo de visión theta para UNA semilla del campo
-    turbulento, y ajusta el perfil de dispersión transversal de RM en cada
-    ángulo (con las dos formas funcionales: gaussiana y beta, esta última
-    tanto libre como con `p` fijado a su valor físico esperado).
 
-    `logger`: si se da (uso normal desde `barrer_angulos_monte_carlo`, que
-    configura un único logger para las 50 semillas), se usa tal cual. Si es
-    None (uso standalone de esta función sola), se configura uno aquí mismo
-    para que la función siga siendo utilizable de forma independiente.
-    """
-    if logger is None:
-        os.makedirs(os.path.join(ruta_resultados, "logs"), exist_ok=True)
-        logger = configurar_logging(directorio_logs=os.path.join(ruta_resultados, "logs"))
-
-    if n_bins is None:
-        n_bins = config.N_BORDES_PERFIL
-
-    xp = get_backend(use_gpu)
-
-    # 1. Extracción de valores físicos con unidades
-    n_base = config_fisica.N_BASE
-    dx_base_kpc = config_fisica.DX_BASE.to_value(u.kpc)
-    dx_base_pc = config_fisica.DX_BASE.to_value(u.pc)
-    longitud_filamento_kpc = config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc)
-    b0_microgauss = config_fisica.B0.to_value(u.microgauss)
-    nu_hz = config_fisica.NU.to_value(u.Hz)
-    lambda_onda_m = config_fisica.LAMBDA_ONDA.to_value(u.m)
-    dist_max_ajuste_kpc = config_fisica.DIST_MAX_AJUSTE.to_value(u.kpc)
-    lambda_min_kpc = config_fisica.LAMBDA_MIN.to_value(u.kpc)
-    lambda_max_kpc = config_fisica.LAMBDA_MAX.to_value(u.kpc)
-
-    # 2. Validación de la geometría
-    caja_ok = verificar_caja_suficiente(
-        n_base=n_base,
-        dx_base_kpc=dx_base_kpc,
-        longitud_filamento_kpc=longitud_filamento_kpc,
-        thetas_grados=thetas_grados,
-        logger=logger
+def _parametros():
+    """Valores desnudos de config_fisica (leídos en cada llamada para que los
+    tests puedan mockear config_fisica)."""
+    return dict(
+        n_base=int(config_fisica.N_BASE),
+        dx_kpc=config_fisica.DX_BASE.to_value(u.kpc),
+        dl_pc=config_fisica.DX_BASE.to_value(u.pc),
+        longitud_kpc=config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc),
+        rc_kpc=config_fisica.RC.to_value(u.kpc),
+        n0_cm3=config_fisica.N0.to_value(u.cm**-3),
+        beta=float(config_fisica.BETA),
+        b0_ug=config_fisica.B0.to_value(u.microgauss),
+        dist_max_kpc=config_fisica.DIST_MAX_AJUSTE.to_value(u.kpc),
+        lambda_min_kpc=config_fisica.LAMBDA_MIN.to_value(u.kpc),
+        lambda_max_kpc=config_fisica.LAMBDA_MAX.to_value(u.kpc),
+        n_spec=float(config_fisica.N_SPEC),
     )
-    if not caja_ok:
-        logger.error("Abortando: Dimensiones de caja insuficientes para el barrido.")
+
+
+def _validar_caja(par, thetas_grados, logger):
+    ok_longitud = verificar_caja_suficiente(
+        n_base=par["n_base"], dx_base_kpc=par["dx_kpc"],
+        longitud_filamento_kpc=par["longitud_kpc"],
+        thetas_grados=thetas_grados, logger=logger,
+    )
+    ok_radial = verificar_profundidad_radial(
+        n_base=par["n_base"], dx_base_kpc=par["dx_kpc"], r_core_kpc=par["rc_kpc"],
+        beta=par["beta"], dist_max_ajuste_kpc=par["dist_max_kpc"], logger=logger,
+    )
+    if not (ok_longitud and ok_radial):
         raise ValueError(
-            "Caja insuficiente para el barrido angular: el filamento se trunca "
-            "en la línea de visión para algún theta del barrido (ver el warning "
-            "de verificar_caja_suficiente para el valor exacto). Aumentar N_BASE, "
-            "DX_BASE, acortar LONGITUD_FILAMENTO o el rango de theta antes de "
-            "continuar -ignorar este error invalida la comparación entre ángulos."
+            "Caja insuficiente para el barrido angular (ver el warning de "
+            "validacion.py): el filamento o su cola radial quedan truncados "
+            "en la línea de visión, lo que sesga la comparación entre ángulos."
         )
 
-    # Ventana de ajuste FIJA (independiente de N_BASE/DX_BASE): usar hasta la
-    # mitad de la caja solo si esta resulta más angosta que la ventana física
-    # por defecto (4*RC). Ver la nota en config_fisica.DIST_MAX_AJUSTE.
-    distancia_media_caja = (n_base / 2) * dx_base_kpc
-    distancia_max = min(dist_max_ajuste_kpc, distancia_media_caja)
-    if dist_max_ajuste_kpc > distancia_media_caja:
-        logger.warning(
-            "DIST_MAX_AJUSTE (%.0f kpc) excede la mitad de la caja (%.0f kpc); "
-            "se recorta la ventana de ajuste a %.0f kpc.",
-            dist_max_ajuste_kpc, distancia_media_caja, distancia_max,
-        )
 
-    logger.info(f"Iniciando barrido para {len(thetas_grados)} ángulos: {thetas_grados}")
-    logger.info(
-        "Ventana de ajuste: 0-%.0f kpc en %d bordes de bin (fija, no depende "
-        "del tamaño de caja; compartida con plots.fig2 vía config.N_BORDES_PERFIL).",
-        distancia_max, n_bins,
-    )
-
-    # El campo turbulento NO depende de axis_direction (se genera siempre en
-    # el marco fijo de la caja; es la densidad del filamento la que se
-    # reorienta dentro de ella, ver `model.construir_escenario`), así que
-    # para una semilla dada es idéntico en todos los theta del barrido.
-    # Antes se regeneraba (con la misma semilla, o sea el mismo resultado)
-    # en cada iteración del `for theta_deg in thetas_grados` de abajo -aquí
-    # se genera una sola vez y se reutiliza, evitando recalcular la FFT del
-    # campo ~len(thetas_grados) veces de más por semilla.
-    generador_campo = GaussianRandomVectorField(
-        n=n_base,
-        dx=dx_base_kpc,
-        spectral_index=config_fisica.N_SPEC,
-        scale_min=lambda_min_kpc,
-        scale_max=lambda_max_kpc,
-    )
-    rng = np.random.RandomState(seed)
-    bx0, by0, bz0 = generador_campo.sample(use_gpu=use_gpu, rng=rng)
-    bx0, by0, bz0 = GaussianRandomVectorField.normalize_to_rms(
-        bx0, by0, bz0, b0_microgauss, xp=xp
-    )
-    campo_b = (bx0, by0, bz0)
-
-    # Valor de `p` físicamente esperado para el ajuste beta con p fijo (ver
-    # `p_random_walk_cilindro`): la comprobación de validación real de si el
-    # modelo recupera r_c, no el ajuste de 3 parámetros libres (casi
-    # degenerado entre r_c y p en el rango de distancias de este proyecto).
-    p_fijo = p_random_walk_cilindro(config_fisica.BETA)
-
-    anchos, anchos_err, sigma0s, r2_gauss = [], [], [], []
-    rc_beta, rc_beta_err, p_beta, sigma0_beta, r2_beta = [], [], [], [], []
-    rc_beta_fijo, rc_beta_fijo_err, sigma0_beta_fijo, r2_beta_fijo = [], [], [], []
-
+def preparar_geometria(thetas_grados, bordes, generador, par, xp):
+    """
+    Para cada theta: densidad `ne` (en el backend `xp`), máscara del cuerpo del
+    filamento, mapa de distancia al eje proyectado, mapa de sigma_RM esperado
+    y perfil esperado por bin. No depende de la semilla: se calcula una vez.
+    """
+    n = par["n_base"]
+    vacio = xp.zeros((n, n, n), dtype=xp.float32)
+    geometria = []
     for theta_deg in thetas_grados:
-        theta = np.deg2rad(theta_deg)
-        axis_direction = [np.sin(theta), 0.0, np.cos(theta)]
-
-        # 3. Construcción del escenario físico (filamento de longitud finita),
-        # reutilizando el campo turbulento generado arriba para esta semilla.
-        bx, by, bz, ne, ne_rel, r = construir_escenario(
-            n_spec=config_fisica.N_SPEC,
-            b0_microgauss=b0_microgauss,
-            axis_direction=axis_direction,
-            use_gpu=use_gpu,
-            longitud_filamento_kpc=longitud_filamento_kpc,
-            campo_b=campo_b,
+        eje = filament_axis_from_viewing_angle(np.deg2rad(theta_deg))
+        _, _, _, ne, _, _ = construir_escenario(
+            n_spec=par["n_spec"], b0_microgauss=par["b0_ug"], axis_direction=eje,
+            use_gpu=(xp is not np), longitud_filamento_kpc=par["longitud_kpc"],
+            campo_b=(vacio, vacio, vacio), dx_kpc=par["dx_kpc"],
+            density_profile=BetaModel(n0=par["n0_cm3"], r_core=par["rc_kpc"], beta=par["beta"]),
         )
-
-        # 4. Observación (Mock de telescopio)
-        observacion = ObservationConfig(
-            pixel_size=dx_base_kpc,
-            dl=dx_base_pc,
-            frequency=nu_hz,
-            wavelength=lambda_onda_m,
-            p_index=config_fisica.P_SPEC,
+        mascara = to_numpy(sky_footprint_mask(ne, xp=xp)) & filament_body_mask(
+            (n, n), eje, par["dx_kpc"], par["longitud_kpc"], par["rc_kpc"],
         )
-        resultado = ObservationPipeline(config=observacion, xp=xp).run(bx, by, bz, ne, ne_rel)
-
-        # Máscara de huella real del filamento finito sobre el mapa 2D: sin
-        # esto, los píxeles más allá de las puntas proyectadas del filamento
-        # (RM≈0 en toda su línea de visión) se mezclan en los bins de
-        # distancia transversal y diluyen el sigma_RM medido -tanto más
-        # cuanto más corta es la huella proyectada (peor a theta chico). Ver
-        # `faradaymr.simulation.geometry.sky_footprint_mask`.
-        footprint = sky_footprint_mask(ne, xp=xp) & filament_body_mask(
-            resultado.rm_map.shape, axis_direction, dx_base_kpc,
-            longitud_filamento_kpc, config_fisica.RC.to_value(u.kpc), xp=xp,
+        distancia = projected_axis_distance((n, n), eje, par["dx_kpc"])
+        sigma_esp = to_numpy(
+            expected_rm_dispersion_map(ne, generador, par["b0_ug"], par["dl_pc"], xp=xp)
         )
-
-        # 5. Análisis de dispersión transversal (ventana fija, ver arriba)
-        bordes = np.linspace(0.0, distancia_max, n_bins)
-        centros, dispersion = transverse_rm_dispersion(
-            resultado.rm_map, axis_direction, dx_base_kpc, bordes,
-            footprint_mask=footprint, xp=xp,
+        _, var_esp = radial_profile(
+            sigma_esp**2, distancia, bordes, statistic="mean", mascara=mascara,
         )
+        en_ventana = mascara & (distancia <= bordes[-1])
+        geometria.append(dict(
+            theta=float(theta_deg), eje=eje, ne=ne, mascara=mascara,
+            en_ventana=en_ventana, sigma_esperada=sigma_esp,
+            perfil_esperado=np.sqrt(var_esp),
+        ))
+    return geometria
 
-        # 6a. Ajuste gaussiano (hipótesis original del proyecto)
-        ajuste_g = fit_transverse_dispersion(centros, dispersion)
-        anchos.append(ajuste_g.width)
-        anchos_err.append(ajuste_g.width_err)
-        sigma0s.append(ajuste_g.sigma0)
-        r2_gauss.append(ajuste_g.r_squared)
 
-        # 6b. Ajuste con la forma derivada del perfil beta, p LIBRE
-        # (comparación exploratoria: no se asume a ciegas que la gaussiana
-        # es la forma correcta). r_c y p quedan casi degenerados en el rango
-        # de distancias típico -ver 6c para la comprobación de validación.
-        ajuste_b = fit_beta_dispersion(centros, dispersion)
-        rc_beta.append(ajuste_b.r_c)
-        rc_beta_err.append(ajuste_b.r_c_err)
-        p_beta.append(ajuste_b.p)
-        sigma0_beta.append(ajuste_b.sigma0)
-        r2_beta.append(ajuste_b.r_squared)
+def _ajustes(centros, perfil, rc_kpc, errores=None):
+    """Los tres ajustes de un perfil, como diccionario plano."""
+    b = fit_beta_dispersion(centros, perfil, rc_fijo=rc_kpc, errores=errores)
+    libre = fit_beta_dispersion(centros, perfil, errores=errores)
+    g = fit_transverse_dispersion(centros, perfil, errores=errores)
+    return dict(
+        sigma0=b.sigma0, sigma0_err=b.sigma0_err, p=b.p, p_err=b.p_err,
+        hwhm=semiancho_media_altura(rc_kpc, b.p), r2_beta=b.r_squared,
+        rc_libre=libre.r_c, p_libre=libre.p, r2_libre=libre.r_squared,
+        w_gauss=g.width, sigma0_gauss=g.sigma0, r2_gauss=g.r_squared,
+    )
 
-        # 6c. Ajuste beta con p FIJO al valor físico esperado (2 parámetros
-        # libres: sigma0, r_c). Esta es la comprobación real de si el
-        # pipeline recupera el r_c de entrada (config_fisica.RC).
-        ajuste_b_fijo = fit_beta_dispersion(centros, dispersion, p_fijo=p_fijo)
-        rc_beta_fijo.append(ajuste_b_fijo.r_c)
-        rc_beta_fijo_err.append(ajuste_b_fijo.r_c_err)
-        sigma0_beta_fijo.append(ajuste_b_fijo.sigma0)
-        r2_beta_fijo.append(ajuste_b_fijo.r_squared)
 
-        logger.info(
-            "theta=%.1f°: sigma0=%.3g rad/m2 | gauss: width=%.3g±%.3g kpc R2=%.3f "
-            "| beta(p libre): rc=%.3g±%.3g kpc p=%.2f R2=%.3f "
-            "| beta(p=%.2f fijo): rc=%.3g±%.3g kpc R2=%.3f",
-            theta_deg, ajuste_g.sigma0,
-            ajuste_g.width, ajuste_g.width_err, ajuste_g.r_squared,
-            ajuste_b.r_c, ajuste_b.r_c_err, ajuste_b.p, ajuste_b.r_squared,
-            p_fijo, ajuste_b_fijo.r_c, ajuste_b_fijo.r_c_err, ajuste_b_fijo.r_squared,
-        )
+def analizar_perfiles(perfiles, centros, perfiles_esperados, rc_kpc,
+                      n_bootstrap=300, semilla_bootstrap=12345):
+    """
+    Analiza los perfiles medidos, forma (n_semillas, n_theta, n_bins):
 
-    return {
-        "theta_grados": np.array(thetas_grados),
-        # Ajuste gaussiano (nombres históricos, se conservan por compatibilidad)
-        "width_kpc": np.array(anchos),
-        "width_err_kpc": np.array(anchos_err),
-        "sigma0": np.array(sigma0s),
-        "r_squared_gauss": np.array(r2_gauss),
-        # Ajuste con la forma beta, p libre (ver faradaymr.analysis.fitting.beta_dispersion_model)
-        "rc_beta_kpc": np.array(rc_beta),
-        "rc_beta_err_kpc": np.array(rc_beta_err),
-        "p_beta": np.array(p_beta),
-        "sigma0_beta": np.array(sigma0_beta),
-        "r_squared_beta": np.array(r2_beta),
-        # Ajuste con la forma beta, p FIJO al valor físico esperado (validación)
-        "rc_beta_fijo_kpc": np.array(rc_beta_fijo),
-        "rc_beta_fijo_err_kpc": np.array(rc_beta_fijo_err),
-        "sigma0_beta_fijo": np.array(sigma0_beta_fijo),
-        "r_squared_beta_fijo": np.array(r2_beta_fijo),
-        "p_fijo": p_fijo,
+    - apila: sigma_apilado = sqrt(<sigma_s^2>_s) por bin (equivale a
+      promediar RM^2 de todos los píxeles de todas las semillas);
+    - errores por bin y de los parámetros con bootstrap sobre semillas;
+    - ajusta el perfil apilado (ponderado) y el esperado;
+    - dispersión de UNA realización: ajuste semilla por semilla.
+
+    Función pura de numpy (sin física): la reusan los tests y plots.py.
+    """
+    perfiles = np.asarray(perfiles, dtype=float)
+    n_semillas, n_theta, _ = perfiles.shape
+    rng = np.random.default_rng(semilla_bootstrap)
+
+    apilado = np.sqrt(np.nanmean(perfiles**2, axis=0))
+    claves = ["sigma0", "p", "hwhm", "w_gauss"]
+    boot_perfiles = np.full((n_bootstrap,) + apilado.shape, np.nan)
+    boot_par = {k: np.full((n_bootstrap, n_theta), np.nan) for k in claves}
+    if n_semillas > 1:
+        for b in range(n_bootstrap):
+            idx = rng.integers(0, n_semillas, n_semillas)
+            boot_perfiles[b] = np.sqrt(np.nanmean(perfiles[idx] ** 2, axis=0))
+            for t in range(n_theta):
+                try:
+                    a = _ajustes(centros, boot_perfiles[b, t], rc_kpc)
+                except (RuntimeError, ValueError):
+                    continue
+                for k in claves:
+                    boot_par[k][b, t] = a[k]
+        apilado_err = np.nanstd(boot_perfiles, axis=0, ddof=1)
+    else:
+        apilado_err = np.full_like(apilado, np.nan)
+
+    salida = {
+        "perfil_apilado": apilado,
+        "perfil_apilado_err": apilado_err,
+        "perfil_esperado": np.asarray(perfiles_esperados, dtype=float),
     }
+    por_theta_mc, por_theta_esp = [], []
+    for t in range(n_theta):
+        errores = apilado_err[t] if n_semillas > 1 else None
+        por_theta_mc.append(_ajustes(centros, apilado[t], rc_kpc, errores))
+        por_theta_esp.append(_ajustes(centros, perfiles_esperados[t], rc_kpc))
+    for k in por_theta_mc[0]:
+        salida[f"mc_{k}"] = np.array([a[k] for a in por_theta_mc])
+        salida[f"esp_{k}"] = np.array([a[k] for a in por_theta_esp])
+    for k in claves:
+        salida[f"mc_{k}_err"] = (
+            np.nanstd(boot_par[k], axis=0, ddof=1) if n_semillas > 1
+            else np.full(n_theta, np.nan)
+        )
+
+    # Una sola realización: dispersión entre semillas del ajuste individual.
+    s0_ind = np.full((n_semillas, n_theta), np.nan)
+    p_ind = np.full((n_semillas, n_theta), np.nan)
+    for s in range(n_semillas):
+        for t in range(n_theta):
+            try:
+                b = fit_beta_dispersion(centros, perfiles[s, t], rc_fijo=rc_kpc)
+            except (RuntimeError, ValueError):
+                continue
+            s0_ind[s, t], p_ind[s, t] = b.sigma0, b.p
+    salida["una_realizacion_sigma0_std"] = np.nanstd(s0_ind, axis=0)
+    salida["una_realizacion_p_std"] = np.nanstd(p_ind, axis=0)
+    return salida
 
 
 def barrer_angulos_monte_carlo(
     thetas_grados,
     ruta_resultados,
-    n_semillas=50,
-    use_gpu=True,
+    n_semillas=None,
+    use_gpu=None,
     n_bins=None,
+    n_bootstrap=300,
+    semilla_inicial=0,
+    logger=None,
 ):
     """
-    Orquesta múltiples realizaciones aleatorias (Monte Carlo) del barrido angular.
-
-    Configura el logging UNA sola vez aquí (un solo archivo de log para las
-    `n_semillas` corridas) y se lo pasa a `barrer_angulos` en cada
-    iteración -antes `barrer_angulos` llamaba a `configurar_logging` en cada
-    semilla, generando 50 archivos de log por corrida del Monte Carlo (el
-    mismo patrón que ya causó el incidente de logs commiteados por
-    accidente, ver `.gitignore`).
+    Barrido Monte Carlo completo. Devuelve un diccionario listo para
+    `np.savez` (ver el docstring del módulo para el contenido).
     """
-    os.makedirs(os.path.join(ruta_resultados, "logs"), exist_ok=True)
-    logger = configurar_logging(directorio_logs=os.path.join(ruta_resultados, "logs"))
+    if logger is None:
+        os.makedirs(os.path.join(ruta_resultados, "logs"), exist_ok=True)
+        logger = configurar_logging(directorio_logs=os.path.join(ruta_resultados, "logs"))
+    if n_semillas is None:
+        n_semillas = int(config_fisica.N_SEMILLAS)
+    if n_bins is None:
+        n_bins = int(config_fisica.N_BORDES_PERFIL)
+    thetas_grados = [float(t) for t in thetas_grados]
 
-    logger.info("Iniciando Monte Carlo: %d semillas x %d ángulos = %d corridas totales.",
-                n_semillas, len(thetas_grados), n_semillas * len(thetas_grados))
+    par = _parametros()
+    xp = get_backend(use_gpu)
+    _validar_caja(par, thetas_grados, logger)
 
-    n_theta = len(thetas_grados)
-    nan_col = np.full(n_theta, np.nan)
+    dist_max = min(par["dist_max_kpc"], par["n_base"] / 2 * par["dx_kpc"])
+    bordes = np.linspace(0.0, dist_max, n_bins)
+    centros = 0.5 * (bordes[:-1] + bordes[1:])
 
-    anchos_por_theta = []
-    sigma0_por_theta = []
-    r2_gauss_por_theta = []
-    rc_beta_por_theta = []
-    r2_beta_por_theta = []
-    rc_beta_fijo_por_theta = []
-    r2_beta_fijo_por_theta = []
-    p_fijo = None
+    generador = GaussianRandomVectorField(
+        n=par["n_base"], dx=par["dx_kpc"], spectral_index=par["n_spec"],
+        scale_min=par["lambda_min_kpc"], scale_max=par["lambda_max_kpc"],
+    )
+    lambda_corr = longitud_correlacion_los(generador)
+    logger.info(
+        "Barrido: %d ángulos x %d semillas; ventana 0-%.0f kpc en %d bins; "
+        "longitud de correlación de B_z en la LoS: %.0f kpc.",
+        len(thetas_grados), n_semillas, dist_max, n_bins - 1, lambda_corr,
+    )
 
-    for semilla in range(n_semillas):
-        logger.info("--- Ejecutando semilla Monte Carlo %d/%d ---", semilla + 1, n_semillas)
-        resultado = barrer_angulos(
-            thetas_grados,
-            ruta_resultados,
-            use_gpu=use_gpu,
-            n_bins=n_bins,
-            seed=semilla,
-            logger=logger,
+    geometria = preparar_geometria(thetas_grados, bordes, generador, par, xp)
+
+    n_theta, n_b = len(thetas_grados), len(centros)
+    perfiles = np.full((n_semillas, n_theta, n_b), np.nan)
+    hist_z = np.zeros((n_theta, len(BORDES_HIST_Z) - 1))
+    momentos = np.zeros((n_theta, 5))  # n, sum z, z^2, z^3, z^4
+
+    for k in range(n_semillas):
+        bz = _campo_bz(generador, semilla_inicial + k, par["b0_ug"], xp)
+        for t, geo in enumerate(geometria):
+            rm = to_numpy(rotation_measure(geo["ne"], bz, par["dl_pc"], xp=xp))
+            _, perfil = transverse_rm_dispersion(
+                rm, geo["eje"], par["dx_kpc"], bordes,
+                footprint_mask=geo["mascara"], statistic="rms",
+            )
+            perfiles[k, t] = to_numpy(perfil)
+            z = rm[geo["en_ventana"]] / geo["sigma_esperada"][geo["en_ventana"]]
+            hist_z[t] += np.histogram(z, bins=BORDES_HIST_Z)[0]
+            momentos[t] += [z.size, z.sum(), (z**2).sum(), (z**3).sum(), (z**4).sum()]
+        logger.info("Semilla %d/%d lista.", k + 1, n_semillas)
+
+    analisis = analizar_perfiles(
+        perfiles, centros, np.array([g["perfil_esperado"] for g in geometria]),
+        par["rc_kpc"], n_bootstrap=n_bootstrap if n_semillas > 1 else 0,
+    )
+
+    n_z = momentos[:, 0]
+    media = momentos[:, 1] / n_z
+    m2 = momentos[:, 2] / n_z - media**2
+    m3 = momentos[:, 3] / n_z - 3 * media * momentos[:, 2] / n_z + 2 * media**3
+    m4 = (momentos[:, 4] / n_z - 4 * media * momentos[:, 3] / n_z
+          + 6 * media**2 * momentos[:, 2] / n_z - 3 * media**4)
+
+    resultados = dict(
+        theta_grados=np.array(thetas_grados),
+        bordes_kpc=bordes, centros_kpc=centros,
+        perfiles_rms=perfiles,
+        rc_kpc=par["rc_kpc"], beta=par["beta"], b0_ng=1e3 * par["b0_ug"],
+        n0_cm3=par["n0_cm3"],
+        longitud_kpc=par["longitud_kpc"], lambda_corr_kpc=lambda_corr,
+        p_frontal=p_vista_frontal(par["beta"]), p_lateral=p_vista_lateral(par["beta"]),
+        n_semillas=n_semillas,
+        hist_bordes_z=BORDES_HIST_Z, hist_z=hist_z,
+        z_media=media, z_std=np.sqrt(m2), z_asimetria=m3 / m2**1.5,
+        z_exceso_curtosis=m4 / m2**2 - 3.0,
+        **analisis,
+    )
+    for t, th in enumerate(thetas_grados):
+        logger.info(
+            "theta=%4.1f°: sigma0=%.4f±%.4f (esp %.4f) rad/m2 | p=%.3f±%.3f "
+            "(esp %.3f) | d_1/2=%.0f kpc | R2 beta=%.3f gauss=%.3f",
+            th, resultados["mc_sigma0"][t], resultados["mc_sigma0_err"][t],
+            resultados["esp_sigma0"][t], resultados["mc_p"][t],
+            resultados["mc_p_err"][t], resultados["esp_p"][t],
+            resultados["mc_hwhm"][t], resultados["mc_r2_beta"][t],
+            resultados["mc_r2_gauss"][t],
         )
-        anchos_por_theta.append(resultado["width_kpc"])
-        sigma0_por_theta.append(resultado["sigma0"])
-        # .get(...) con relleno de NaN: mantiene compatibilidad con quien
-        # mockee `barrer_angulos` devolviendo solo las llaves históricas.
-        r2_gauss_por_theta.append(resultado.get("r_squared_gauss", nan_col))
-        rc_beta_por_theta.append(resultado.get("rc_beta_kpc", nan_col))
-        r2_beta_por_theta.append(resultado.get("r_squared_beta", nan_col))
-        rc_beta_fijo_por_theta.append(resultado.get("rc_beta_fijo_kpc", nan_col))
-        r2_beta_fijo_por_theta.append(resultado.get("r_squared_beta_fijo", nan_col))
-        if p_fijo is None:
-            p_fijo = resultado.get("p_fijo", np.nan)
+    return resultados
 
-    anchos_por_theta = np.array(anchos_por_theta)
-    sigma0_por_theta = np.array(sigma0_por_theta)
-    r2_gauss_por_theta = np.array(r2_gauss_por_theta)
-    rc_beta_por_theta = np.array(rc_beta_por_theta)
-    r2_beta_por_theta = np.array(r2_beta_por_theta)
-    rc_beta_fijo_por_theta = np.array(rc_beta_fijo_por_theta)
-    r2_beta_fijo_por_theta = np.array(r2_beta_fijo_por_theta)
 
-    logger.info("Monte Carlo finalizado exitosamente.")
+def _campo_bz(generador, semilla, b0_ug, xp):
+    """B_z de la realización `semilla`, normalizada a <B^2> = B0^2. Es el
+    único componente que entra en RM (la LoS es el eje z de la caja) y no
+    depende de theta: se genera una vez por semilla para todo el barrido."""
+    bx, by, bz = generador.sample(
+        use_gpu=(xp is not np), rng=np.random.RandomState(semilla)
+    )
+    _, _, bz = GaussianRandomVectorField.normalize_to_rms(bx, by, bz, b0_ug, xp=xp)
+    return bz
 
-    return {
-        "theta_grados": np.array(thetas_grados),
-        "width_medio_kpc": anchos_por_theta.mean(axis=0),
-        "width_std_kpc": anchos_por_theta.std(axis=0),
-        "sigma0_medio": sigma0_por_theta.mean(axis=0),
-        "sigma0_std": sigma0_por_theta.std(axis=0),
-        "r_squared_gauss_medio": np.nanmean(r2_gauss_por_theta, axis=0),
-        "rc_beta_medio_kpc": np.nanmean(rc_beta_por_theta, axis=0),
-        "rc_beta_std_kpc": np.nanstd(rc_beta_por_theta, axis=0),
-        "r_squared_beta_medio": np.nanmean(r2_beta_por_theta, axis=0),
-        "rc_beta_fijo_medio_kpc": np.nanmean(rc_beta_fijo_por_theta, axis=0),
-        "rc_beta_fijo_std_kpc": np.nanstd(rc_beta_fijo_por_theta, axis=0),
-        "r_squared_beta_fijo_medio": np.nanmean(r2_beta_fijo_por_theta, axis=0),
-        "p_fijo": p_fijo if p_fijo is not None else np.nan,
-        "n_semillas": n_semillas,
-    }
+
+def barrer_angulos(thetas_grados, ruta_resultados, use_gpu=None, n_bins=None,
+                   seed=0, logger=None):
+    """Barrido con UNA sola realización del campo (semilla `seed`): útil
+    para pruebas rápidas. Sin bootstrap (los errores quedan en NaN)."""
+    return barrer_angulos_monte_carlo(
+        thetas_grados, ruta_resultados, n_semillas=1, use_gpu=use_gpu,
+        n_bins=n_bins, n_bootstrap=0, semilla_inicial=seed, logger=logger,
+    )
 
 
 if __name__ == "__main__":
-    # Leemos los ángulos definidos en config.py, si están (si no, un barrido
-    # por defecto de 0 a 85 grados en 10 pasos).
-    angulos_numpy = config.THETAS_BARRIDO if hasattr(config, "THETAS_BARRIDO") else np.linspace(0, 85, 10)
-    angulos = [float(x) for x in angulos_numpy]
-
     ruta_salida = os.path.join(os.path.dirname(__file__), "results", "barrido_theta")
     os.makedirs(ruta_salida, exist_ok=True)
-
-    try:
-        resultados = barrer_angulos_monte_carlo(
-            thetas_grados=angulos,
-            ruta_resultados=ruta_salida,
-            n_semillas=50,  # Decidido explícitamente para el congreso
-            use_gpu=False,
-        )
-
-        archivo_npz = os.path.join(ruta_salida, "barrido_theta_mc.npz")
-        np.savez(archivo_npz, **resultados)
-        print(f"Barrido Monte Carlo finalizado correctamente. Resultados guardados en {archivo_npz}")
-
-    except Exception as e:
-        print(f"Error durante el barrido Monte Carlo: {e}")
-        import sys
-        sys.exit(1)
+    resultados = barrer_angulos_monte_carlo(
+        thetas_grados=config_fisica.THETAS_BARRIDO, ruta_resultados=ruta_salida,
+    )
+    archivo_npz = os.path.join(ruta_salida, "barrido_theta_mc.npz")
+    np.savez(archivo_npz, **resultados)
+    print(f"Barrido Monte Carlo terminado. Resultados en {archivo_npz}")

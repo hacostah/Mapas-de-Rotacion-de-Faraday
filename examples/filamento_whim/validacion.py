@@ -66,3 +66,62 @@ def verificar_caja_suficiente(
             warnings.warn(msg)
 
     return bool(profundidad_necesaria <= lado_caja_kpc)
+
+def fraccion_varianza_retenida(d_kpc, semiprofundidad_kpc, r_core_kpc, beta):
+    """
+    Fracción de la varianza de RM (vista lateral, paseo aleatorio:
+    sigma_RM^2 ∝ integral de n_e^2 dl) que conserva una línea de visión
+    truncada en |l| <= semiprofundidad, a distancia `d_kpc` del eje de un
+    filamento con perfil beta, respecto de una línea de visión infinita.
+    """
+    from scipy.integrate import quad
+
+    def integrando(l):
+        return (1.0 + (d_kpc**2 + l**2) / r_core_kpc**2) ** (-3.0 * beta)
+
+    truncada = quad(integrando, -semiprofundidad_kpc, semiprofundidad_kpc)[0]
+    infinita = quad(integrando, -np.inf, np.inf)[0]
+    return truncada / infinita
+
+
+def verificar_profundidad_radial(
+    n_base: int,
+    dx_base_kpc: float,
+    r_core_kpc: float,
+    beta: float,
+    dist_max_ajuste_kpc: float,
+    tolerancia: float = 0.05,
+    logger=None,
+) -> bool:
+    """
+    Complemento de `verificar_caja_suficiente`: aquella comprueba que quepa
+    la LONGITUD del filamento; esta comprueba que quepa su COLA RADIAL.
+
+    Con el filamento de lado, la línea de visión de un píxel a distancia d
+    del eje atraviesa el perfil beta a radios sqrt(d^2 + l^2). Si la caja
+    corta esa integral en |l| = N*dx/2, la varianza de RM en los bins
+    exteriores sale subestimada y el perfil transversal queda más empinado
+    de lo que es (p ajustado mayor que el valor analítico). Ocurre solo en
+    las vistas oblicuas/laterales, así que además sesga la comparación entre
+    ángulos.
+
+    Devuelve False (y avisa) si en `dist_max_ajuste_kpc` se pierde más de
+    `tolerancia` de la varianza.
+    """
+    semiprofundidad = n_base * dx_base_kpc / 2.0
+    retenida = fraccion_varianza_retenida(
+        dist_max_ajuste_kpc, semiprofundidad, r_core_kpc, beta
+    )
+    ok = retenida >= 1.0 - tolerancia
+    if not ok:
+        msg = (
+            f"La caja (+/-{semiprofundidad:.0f} kpc) solo conserva el "
+            f"{100 * retenida:.1f}% de la varianza de RM a d={dist_max_ajuste_kpc:.0f} kpc "
+            f"en la vista lateral (tolerancia {100 * tolerancia:.0f}%). Aumentar "
+            "N_BASE o DX_BASE, o reducir DIST_MAX_AJUSTE."
+        )
+        if logger is not None:
+            logger.warning(msg)
+        else:
+            warnings.warn(msg)
+    return bool(ok)

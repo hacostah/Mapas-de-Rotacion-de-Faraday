@@ -38,3 +38,18 @@ def test_resumen_umbral_deteccion_identifica_extremos():
     assert resumen["theta_n_minimo"] == 0.0
     assert resumen["theta_n_maximo"] == 90.0
     assert resumen["n_minimo"] < resumen["n_maximo"]
+
+
+def test_campo_minimo_es_el_inverso_de_n_fuentes():
+    from faradaymr.analysis.deteccion import campo_minimo_detectable
+    sigma0, b = 0.03, 10.0
+    n = n_fuentes_necesarias(sigma0, k_sigma=3.0, sigma_medicion_rad_m2=12.0)
+    b_min = campo_minimo_detectable(n, sigma0, b, k_sigma=3.0, sigma_medicion_rad_m2=12.0)
+    assert np.isclose(b_min, b, rtol=1e-9)
+
+
+def test_error_de_medicion_y_control_aumentan_n():
+    base = n_fuentes_necesarias(0.03, muestra_control=False)
+    assert np.isclose(n_fuentes_necesarias(0.03) / base, 2.0)
+    con_ruido = n_fuentes_necesarias(0.03, sigma_medicion_rad_m2=12.0)
+    assert np.isclose(con_ruido / n_fuentes_necesarias(0.03), ((49 + 144) / 49) ** 2)

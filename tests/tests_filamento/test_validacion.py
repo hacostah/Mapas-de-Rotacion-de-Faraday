@@ -100,3 +100,20 @@ def test_verificar_caja_array_vacio_retorna_true():
         thetas_grados=np.array([]),
     )
     assert resultado is True
+
+
+def test_profundidad_radial_detecta_la_caja_vieja_y_acepta_la_nueva():
+    import warnings
+    from examples.filamento_whim.validacion import verificar_profundidad_radial
+    # Caja anterior del proyecto: +/-1280 kpc, beta=0.5, ventana de 4 r_c.
+    with warnings.catch_warnings(record=True) as avisos:
+        warnings.simplefilter("always")
+        assert not verificar_profundidad_radial(128, 20.0, 300.0, 0.5, 1200.0)
+        assert len(avisos) == 1
+    # Configuración actual: +/-2000 kpc, beta=2/3, ventana de 3 r_c.
+    assert verificar_profundidad_radial(160, 25.0, 300.0, 2 / 3, 900.0)
+
+
+def test_fraccion_retenida_tiende_a_uno_con_caja_infinita():
+    from examples.filamento_whim.validacion import fraccion_varianza_retenida
+    assert fraccion_varianza_retenida(600.0, 1e6, 300.0, 2 / 3) > 0.999

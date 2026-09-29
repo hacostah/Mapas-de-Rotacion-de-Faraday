@@ -20,9 +20,10 @@ def construir_escenario(
     density_profile: DensityProfile | None = None,
     use_gpu=None,
     rng=None,
-    axis_direction=(0, 0, 1), # 2. Añadimos la dirección del eje con valor por defecto
+    axis_direction=(0, 0, 1),
     longitud_filamento_kpc: float | None = None,
     campo_b: tuple | None = None,
+    dx_kpc: float | None = None,
 ):
     """
     Construye la malla 3D de campo magnético y densidad electrónica de un
@@ -62,6 +63,11 @@ def construir_escenario(
     """
     xp = get_backend(use_gpu)
 
+    # `dx_kpc` explícito permite construir el escenario con otra resolución
+    # sin depender de `config.py` (que se evalúa una sola vez al importarse).
+    if dx_kpc is None:
+        dx_kpc = cfg.DX_BASE_KPC
+
     if density_profile is None:
         # El BetaModel intacto, calculando la forma funcional correcta
         density_profile = BetaModel(n0=cfg.N0_CM3, r_core=cfg.RC_KPC, beta=cfg.BETA)
@@ -82,7 +88,7 @@ def construir_escenario(
     else:
         campo = GaussianRandomVectorField(
             n=cfg.N_BASE,
-            dx=cfg.DX_BASE_KPC,
+            dx=dx_kpc,
             spectral_index=n_spec,
             scale_min=cfg.LAMBDA_MIN_KPC,
             scale_max=cfg.LAMBDA_MAX_KPC,
@@ -99,7 +105,7 @@ def construir_escenario(
     # de verdad se usa para integrar la línea de visión. `arange` con offset
     # entero coincide además con la convención de píxel-centro que ya usa
     # `faradaymr.simulation.geometry.projected_axis_distance` para el mapa 2D.
-    eje = (xp.arange(n_grid) - n_grid // 2) * cfg.DX_BASE_KPC
+    eje = (xp.arange(n_grid) - n_grid // 2) * dx_kpc
     xx, yy, zz = xp.meshgrid(eje, eje, eje, indexing="ij")
 
     # Reemplazamos la métrica esférica por la cilíndrica
@@ -114,7 +120,7 @@ def construir_escenario(
         # de un solo píxel; no representa un borde físico difuso real.
         s = axial_projection(xx, yy, zz, axis_direction, xp=xp)
         media_longitud = longitud_filamento_kpc / 2.0
-        ancho_borde = max(cfg.DX_BASE_KPC, 1e-6)
+        ancho_borde = max(dx_kpc, 1e-6)
         mascara_axial = 0.5 * (
             1.0 - xp.tanh((xp.abs(s) - media_longitud) / ancho_borde)
         )

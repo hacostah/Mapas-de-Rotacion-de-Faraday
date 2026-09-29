@@ -1,314 +1,355 @@
+"""
+Figuras finales del Proyecto II (filamento WHIM).
+
+Requiere haber corrido, desde la raíz del repo:
+    python -m examples.filamento_whim.run                 # mapas (fig. 1)
+    python -m examples.filamento_whim.run_barrido_theta   # barrido (figs. 2-6)
+y luego:
+    python -m examples.filamento_whim.plots
+
+Convención: puntos = simulación Monte Carlo (perfil apilado de N semillas,
+barras = bootstrap). El valor esperado del modelo
+(`faradaymr.analysis.expected`) no se dibuja: es una validación del código,
+no un resultado, y vive en tests/tests_filamento/test_expected.py y en las
+llaves `esp_*` del .npz.
+"""
 import os
-import numpy as np
-import matplotlib.pyplot as plt
+
 import astropy.units as u
+import matplotlib
 
-from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
-from faradaymr.analysis.fitting import (
-    fit_transverse_dispersion,
-    fit_beta_dispersion,
-    p_random_walk_cilindro,
-)
-from faradaymr.simulation.geometry import filament_axis_from_viewing_angle
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.stats import norm
+
 from examples.filamento_whim import config_fisica
-from examples.filamento_whim.model import construir_escenario
-from faradaymr.simulation.geometry import sky_footprint_mask, filament_body_mask
+from examples.filamento_whim.umbral_deteccion import (
+    ESCENARIOS,
+    K_SIGMA,
+    calcular as calcular_umbral,
+)
+from faradaymr.analysis.deteccion import (
+    N_FUENTES_STUARDI,
+    SIGMA_INTRINSECA_RAD_M2,
+    campo_minimo_detectable,
+)
+from faradaymr.analysis.fitting import beta_dispersion_model, gaussian_model
 
-# Rutas de los datos generados por run.py y run_barrido_theta.py
 BASE_DIR = os.path.dirname(__file__)
 DIR_MAPAS = os.path.join(BASE_DIR, "results", "mapas_poster")
 ARCHIVO_MC = os.path.join(BASE_DIR, "results", "barrido_theta", "barrido_theta_mc.npz")
 DIR_PLOTS = os.path.join(BASE_DIR, "results", "plots")
 
-os.makedirs(DIR_PLOTS, exist_ok=True)
+# Paleta categórica validada (orden fijo) + tinta neutra para la predicción.
+AZUL, NARANJA, AGUA = "#2a78d6", "#eb6834", "#1baf7a"
+GRIS = "#3d3d3a"
+TINTA_SECUNDARIA = "#6b6a63"
 
-# Estilo unificado para figuras académicas
-plt.rcParams.update({'font.size': 12, 'axes.grid': True, 'grid.alpha': 0.3})
+plt.rcParams.update({
+    "font.size": 11,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.alpha": 0.25,
+    "legend.frameon": False,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
+})
 
 
-def cargar_mapa_rm(theta_grados):
-    """Función auxiliar para leer el mapa RM de la ruta correcta."""
-    ruta = os.path.join(DIR_MAPAS, f"theta_{theta_grados:02.0f}deg", "rm_mapa.npy")
-    if not os.path.exists(ruta):
-        raise FileNotFoundError(f"Falta el mapa para {theta_grados}°. Ejecuta run.py primero.")
-    return np.load(ruta)
+def _guardar(fig, nombre):
+    os.makedirs(DIR_PLOTS, exist_ok=True)
+    ruta = os.path.join(DIR_PLOTS, nombre)
+    fig.savefig(ruta)
+    plt.close(fig)
+    print(f"Generada: {ruta}")
 
 
-def fig1_mapa_rm_ejemplo():
-    # 0°=Frente, 90°=Lado real (antes [0,15,30] nunca mostraba el filamento
-    # de lado; ver la nota en run.py.generar_mapas_poster).
+def _pie(fig, texto):
+    fig.text(0.5, -0.02, texto, ha="center", va="top", fontsize=8.5,
+             color=TINTA_SECUNDARIA, wrap=True)
+
+
+def _puntos(ax, x, y, yerr, color, etiqueta, marcador="o"):
+    ax.errorbar(x, y, yerr=yerr, fmt=marcador, ms=6.5, color=color,
+                mfc="white", mew=1.6, capsize=3, elinewidth=1.2, lw=0,
+                label=etiqueta, zorder=3)
+
+
+def _cargar_mc():
+    if not os.path.exists(ARCHIVO_MC):
+        print("Falta el barrido Monte Carlo: ejecuta run_barrido_theta.py primero.")
+        return None
+    return np.load(ARCHIVO_MC)
+
+
+def _indice_theta(datos, theta):
+    return int(np.argmin(np.abs(datos["theta_grados"] - theta)))
+
+
+def _cientifico(x):
+    exponente = int(np.floor(np.log10(x)))
+    mantisa = x / 10**exponente
+    sup = str(exponente).translate(str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹"))
+    return (f"10{sup}" if np.isclose(mantisa, 1) else f"{mantisa:.1f}×10{sup}")
+
+
+def _texto_parametros(datos):
+    return (
+        f"n₀ = {_cientifico(float(datos['n0_cm3']))} cm⁻³, β = {float(datos['beta']):.2f}, "
+        f"r_c = {float(datos['rc_kpc']):.0f} kpc, L = {float(datos['longitud_kpc']) / 1e3:.0f} Mpc, "
+        f"B = {float(datos['b0_ng']):.0f} nG; {int(datos['n_semillas'])} realizaciones."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fig. 1 — mapas de RM
+# ---------------------------------------------------------------------------
+def fig1_mapas_rm():
     angulos = [0, 30, 60, 90]
-    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
-    dx_kpc = config_fisica.DX_BASE.to_value(u.kpc)
-    limite = config_fisica.N_BASE / 2 * dx_kpc
-
+    dx = config_fisica.DX_BASE.to_value(u.kpc)
+    n = config_fisica.N_BASE
     mapas = {}
     for theta in angulos:
-        try:
-            mapas[theta] = cargar_mapa_rm(theta)
-        except FileNotFoundError:
-            pass
+        ruta = os.path.join(DIR_MAPAS, f"theta_{theta:02d}deg", "rm_mapa.npy")
+        if os.path.exists(ruta):
+            mapas[theta] = np.load(ruta)
+    if not mapas:
+        print("Omitiendo fig. 1: faltan los mapas, ejecuta run.py primero.")
+        return
 
-    # Escala de color COMPARTIDA entre los 4 paneles (antes cada uno tenía su
-    # propio rango, lo que hace parecer visualmente similar la dispersión de
-    # RM a distintos theta aunque su amplitud real sea muy distinta).
-    if mapas:
-        pico = max(np.max(np.abs(m)) for m in mapas.values())
-    else:
-        pico = 1.0
+    limite = n / 2 * dx
+    recorte = 1600.0  # kpc: el filamento mide 2 Mpc; se deja margen a los lados
+    pico = np.percentile(np.abs(np.concatenate([m.ravel() for m in mapas.values()])), 99.8)
 
+    fig, axs = plt.subplots(1, 4, figsize=(17, 4.6), sharey=True,
+                            gridspec_kw=dict(wspace=0.06))
     for ax, theta in zip(axs, angulos):
+        ax.grid(False)
         if theta not in mapas:
-            ax.set_title(f"Falta el mapa para {theta}°. Ejecuta run.py primero.", fontsize=10)
+            ax.set_title(f"θ = {theta}°: falta el mapa")
             continue
-        rm_map = mapas[theta]
-
-        # `rm_map[i, j]`: el eje 0 es x y el eje 1 es y (ver
-        # `faradaymr.simulation.geometry.projected_axis_distance`). imshow
-        # dibuja el primer eje del arreglo en VERTICAL, así que hay que
-        # transponer para que "x" quede horizontal como dice la etiqueta
-        # (sin esto, el mapa salía con los ejes x/y intercambiados).
-        im = ax.imshow(
-            rm_map.T, cmap='RdBu_r', origin='lower',
-            extent=[-limite, limite, -limite, limite],
-            vmin=-pico, vmax=pico,
-        )
-        ax.set_title(f"Medida de Rotación - $\\theta = {theta}^\\circ$")
+        im = ax.imshow(mapas[theta].T, cmap="RdBu_r", origin="lower",
+                       extent=[-limite, limite, -limite, limite], vmin=-pico, vmax=pico)
+        ax.set_xlim(-recorte, recorte)
+        ax.set_ylim(-recorte, recorte)
+        ax.set_title(rf"$\theta = {theta}^\circ$")
         ax.set_xlabel("x (kpc)")
-        if theta == 0:
-            ax.set_ylabel("y (kpc)")
+    axs[0].set_ylabel("y (kpc)")
+    cb = fig.colorbar(im, ax=axs, fraction=0.015, pad=0.015)
+    cb.set_label(r"RM (rad m$^{-2}$)")
+    fig.suptitle("Mapas simulados de medida de rotación del filamento según el ángulo de visión",
+                 y=1.02, fontsize=13)
+    _pie(fig, "θ = ángulo entre el eje del filamento y la línea de visión (0° de frente, 90° de lado). "
+              "Misma realización del campo turbulento en los cuatro paneles y escala de color común. "
+              f"B = {config_fisica.B0.to_value(u.nG):.0f} nG.")
+    _guardar(fig, "fig1_mapas_rm.png")
 
-    fig.colorbar(
-        im, ax=axs, label=r"RM (rad/m$^2$)", fraction=0.023, pad=0.02,
-    )
-    ruta_salida = os.path.join(DIR_PLOTS, "fig1_mapas_rm.png")
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Generada: {ruta_salida}")
 
-
-def fig2_perfil_transversal_con_ajuste():
-    theta = 30
-    try:
-        rm_map = cargar_mapa_rm(theta)
-    except FileNotFoundError:
-        print(f"Omitiendo Fig 2: Falta mapa RM para {theta}°")
+# ---------------------------------------------------------------------------
+# Fig. 2 — perfiles transversales y forma funcional
+# ---------------------------------------------------------------------------
+def fig2_perfiles_transversales():
+    datos = _cargar_mc()
+    if datos is None:
         return
+    d = datos["centros_kpc"]
+    rc = float(datos["rc_kpc"])
+    x = np.linspace(0, datos["bordes_kpc"][-1], 300)
 
-    dx_kpc = config_fisica.DX_BASE.to_value(u.kpc)
-    dist_max_kpc = config_fisica.DIST_MAX_AJUSTE.to_value(u.kpc)
-    axis_dir = filament_axis_from_viewing_angle(np.deg2rad(theta))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5))
 
-    # Recalculamos ne (no se guarda en disco, solo los mapas 2D) con la
-    # misma semilla que usó run.py para este mapa, únicamente para construir
-    # la máscara de huella del filamento finito (ver sky_footprint_mask):
-    # sin ella, los píxeles más allá de las puntas proyectadas diluyen la
-    # dispersión medida en cada bin, igual que en el barrido Monte Carlo.
-    _, _, _, ne, _, _ = construir_escenario(
-        n_spec=config_fisica.N_SPEC,
-        b0_microgauss=config_fisica.B0.to_value(u.microgauss),
-        axis_direction=axis_dir,
-        use_gpu=False,
-        rng=np.random.RandomState(42),
-        longitud_filamento_kpc=config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc),
-    )
-    footprint = sky_footprint_mask(ne) & filament_body_mask(
-        rm_map.shape, axis_dir, dx_kpc,
-        config_fisica.LONGITUD_FILAMENTO.to_value(u.kpc), config_fisica.RC.to_value(u.kpc),
-    )
+    for theta, color, marcador in [(0, AZUL, "o"), (40, AGUA, "D"), (90, NARANJA, "s")]:
+        i = _indice_theta(datos, theta)
+        th = datos["theta_grados"][i]
+        _puntos(ax1, d, datos["perfil_apilado"][i], datos["perfil_apilado_err"][i],
+                color, rf"$\theta={th:.0f}^\circ$: $p={datos['mc_p'][i]:.2f}\pm{datos['mc_p_err'][i]:.2f}$",
+                marcador)
+        ax1.plot(x, beta_dispersion_model(x, datos["mc_sigma0"][i], rc, datos["mc_p"][i]),
+                 color=color, lw=1.8)
+    ax1.set(xlabel="Distancia transversal al eje proyectado d (kpc)",
+            ylabel=r"$\sigma_{RM}(d)$ (rad m$^{-2}$)", ylim=(0, None),
+            title=r"(a) Perfil de dispersión y ajuste $\sigma_0(1+d^2/r_c^2)^{-p}$")
+    ax1.legend(fontsize=9)
 
-    # Ventana de ajuste FIJA (igual que run_barrido_theta.py), no "hasta la
-    # mitad de la caja": así esta figura es comparable con la Fig. 3. El
-    # número de bordes también se comparte vía config (antes esta figura
-    # usaba 15 bordes y el barrido Monte Carlo 12, así que no eran
-    # estrictamente comparables bin a bin pese a compartir la ventana).
-    limite_ventana = min(dist_max_kpc, config_fisica.N_BASE / 2 * dx_kpc)
-    bordes = np.linspace(0, limite_ventana, config_fisica.N_BORDES_PERFIL)
-    centros, dispersion = transverse_rm_dispersion(
-        rm_map, axis_dir, dx_kpc, bordes, footprint_mask=footprint
-    )
+    i = _indice_theta(datos, 90)
+    perfil, err = datos["perfil_apilado"][i], datos["perfil_apilado_err"][i]
+    _puntos(ax2, d, perfil, err, NARANJA, r"Simulación, $\theta=90^\circ$", "s")
+    ax2.plot(x, beta_dispersion_model(x, datos["mc_sigma0"][i], rc, datos["mc_p"][i]),
+             color=NARANJA, lw=1.8,
+             label=rf"Ley beta ($r_c$ fijo): $R^2={datos['mc_r2_beta'][i]:.3f}$")
+    ax2.plot(x, gaussian_model(x, datos["mc_sigma0_gauss"][i], datos["mc_w_gauss"][i]),
+             "--", color=GRIS, lw=1.6,
+             label=rf"Gaussiana: $R^2={datos['mc_r2_gauss'][i]:.3f}$")
+    ax2.set(xlabel="Distancia transversal al eje proyectado d (kpc)",
+            ylabel=r"$\sigma_{RM}(d)$ (rad m$^{-2}$)", ylim=(0, None),
+            title=r"(b) Ley beta y gaussiana ajustadas al perfil a $\theta=90^\circ$")
+    ax2.legend(fontsize=9)
 
-    if hasattr(centros, 'get'):
-        centros = centros.get()
-    if hasattr(dispersion, 'get'):
-        dispersion = dispersion.get()
-
-    validos = ~np.isnan(dispersion)
-    centros_v, dispersion_v = centros[validos], dispersion[validos]
-    ajuste_g = fit_transverse_dispersion(centros_v, dispersion_v)
-    ajuste_b = fit_beta_dispersion(centros_v, dispersion_v)
-    p_fijo = p_random_walk_cilindro(config_fisica.BETA)
-    ajuste_b_fijo = fit_beta_dispersion(centros_v, dispersion_v, p_fijo=p_fijo)
-
-    fig = plt.figure(figsize=(8, 6))
-    plt.scatter(centros, dispersion, color='black', label='Datos (Simulación)', zorder=3)
-
-    x_fit = np.linspace(0, max(centros), 200)
-    y_gauss = ajuste_g.sigma0 * np.exp(-0.5 * (x_fit / ajuste_g.width) ** 2)
-    y_beta = ajuste_b.sigma0 * (1.0 + (x_fit / ajuste_b.r_c) ** 2) ** (-ajuste_b.p)
-    y_beta_fijo = ajuste_b_fijo.sigma0 * (1.0 + (x_fit / ajuste_b_fijo.r_c) ** 2) ** (-p_fijo)
-
-    # Las etiquetas LaTeX necesitan ser "raw" (\sigma, \theta), pero el
-    # salto de línea SÍ debe ser un newline real: mezclar ambas cosas en
-    # una sola cadena raw hacía que "\n" saliera literal en la leyenda
-    # (bug de la versión anterior de esta figura). Se arma con .join().
-    etiqueta_gauss = "\n".join([
-        "Ajuste Gaussiano",
-        rf"$\sigma_0={ajuste_g.sigma0:.4f}$, $w={ajuste_g.width:.1f}$ kpc",
-        rf"$R^2={ajuste_g.r_squared:.3f}$",
-    ])
-    etiqueta_beta = "\n".join([
-        "Ajuste beta, p libre",
-        rf"$\sigma_0={ajuste_b.sigma0:.4f}$, $r_c={ajuste_b.r_c:.1f}\pm{ajuste_b.r_c_err:.1f}$ kpc, $p={ajuste_b.p:.2f}$",
-        rf"$R^2={ajuste_b.r_squared:.3f}$ (r_c y p casi degenerados, ver README)",
-    ])
-    etiqueta_beta_fijo = "\n".join([
-        rf"Ajuste beta, $p={p_fijo:.2f}$ fijo (random-walk)",
-        rf"$\sigma_0={ajuste_b_fijo.sigma0:.4f}$, $r_c={ajuste_b_fijo.r_c:.1f}\pm{ajuste_b_fijo.r_c_err:.1f}$ kpc",
-        rf"$R^2={ajuste_b_fijo.r_squared:.3f}$",
-    ])
-
-    plt.plot(x_fit, y_gauss, 'r-', lw=2, label=etiqueta_gauss)
-    plt.plot(x_fit, y_beta, 'g--', lw=2, label=etiqueta_beta)
-    plt.plot(x_fit, y_beta_fijo, 'b-.', lw=2, label=etiqueta_beta_fijo)
-
-    plt.xlabel("Distancia transversal al eje (kpc)")
-    plt.ylabel(r"$\sigma_{RM}$ (rad/m$^2$)")
-    plt.title(f"Perfil de Dispersión RM Transversal ($\\theta={theta}^\\circ$)")
-    plt.legend(fontsize=8)
-
-    ruta_salida = os.path.join(DIR_PLOTS, "fig2_perfil_transversal.png")
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Generada: {ruta_salida}")
+    _pie(fig, "Puntos: perfil apilado de las realizaciones Monte Carlo (barras: bootstrap). "
+              "Líneas de color: ajuste con r_c fijo al del perfil de densidad. "
+              + _texto_parametros(datos))
+    _guardar(fig, "fig2_perfiles_transversales.png")
 
 
-def fig3_ancho_vs_theta():
-    if not os.path.exists(ARCHIVO_MC):
-        print("Omitiendo Fig 3: Falta el archivo del barrido Monte Carlo.")
+# ---------------------------------------------------------------------------
+# Fig. 3 — forma y ancho del perfil vs theta
+# ---------------------------------------------------------------------------
+def fig3_forma_vs_theta():
+    datos = _cargar_mc()
+    if datos is None:
         return
+    th = datos["theta_grados"]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5))
 
-    datos = np.load(ARCHIVO_MC)
-    theta = datos["theta_grados"]
-    n_semillas = int(datos["n_semillas"]) if "n_semillas" in datos else 50
+    _puntos(ax1, th, datos["mc_p"], datos["mc_p_err"], AZUL, "Simulación Monte Carlo")
+    p_f, p_l = float(datos["p_frontal"]), float(datos["p_lateral"])
+    ax1.axhline(p_f, color=TINTA_SECUNDARIA, lw=1, ls="--")
+    ax1.text(th.max(), p_f + 0.008, rf"límite de frente: $p=3\beta/2={p_f:.2f}$",
+             ha="right", va="bottom", fontsize=9, color=TINTA_SECUNDARIA)
+    ax1.axhline(p_l, color=TINTA_SECUNDARIA, lw=1, ls="--")
+    ax1.text(th.min(), p_l - 0.008, rf"límite de lado: $p=(3\beta-\frac{{1}}{{2}})/2={p_l:.2f}$",
+             ha="left", va="top", fontsize=9, color=TINTA_SECUNDARIA)
+    ax1.set(xlabel=r"Ángulo de visión $\theta$ (grados)",
+            ylabel=r"Exponente $p$ de $\sigma_{RM}\propto(1+d^2/r_c^2)^{-p}$",
+            title=r"(a) Exponente $p$ del perfil vs. ángulo de visión",
+            ylim=(0.6, 1.12))
 
-    width = datos["width_medio_kpc"]
-    width_sem = datos["width_std_kpc"] / np.sqrt(n_semillas)
+    _puntos(ax2, th, datos["mc_hwhm"], datos["mc_hwhm_err"], AZUL, "Simulación Monte Carlo")
+    ax2.set(xlabel=r"Ángulo de visión $\theta$ (grados)",
+            ylabel=r"Semiancho a media altura $d_{1/2}$ (kpc)",
+            title=r"(b) Semiancho a media altura vs. ángulo de visión",
+            ylim=(0, None))
+    cambio = 100 * (datos["mc_hwhm"][-1] / datos["mc_hwhm"][0] - 1)
+    ax2.text(0.03, 0.22,
+             rf"$d_{{1/2}}({th[-1]:.0f}^\circ)\,/\,d_{{1/2}}({th[0]:.0f}^\circ)$ = {1 + cambio / 100:.2f}",
+             transform=ax2.transAxes, va="top", fontsize=9.5)
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    ax.errorbar(
-        theta, width, yerr=width_sem,
-        fmt='o-', color='navy', ecolor='darkred', capsize=5,
-        capthick=1.5, markerfacecolor='white', markeredgewidth=1.5,
-        label="Ajuste gaussiano ($w$)",
-    )
-
-    # Se grafica el ajuste beta con p FIJO (rc_beta_fijo), no el de p libre:
-    # con 3 parámetros libres, r_c y p quedan casi degenerados en el rango
-    # de distancias de este proyecto (barras de error grandes, r_c no
-    # identificado de forma confiable). El de p fijo (ver
-    # `faradaymr.analysis.fitting.p_random_walk_cilindro`) es la
-    # comprobación de validación real. El ajuste libre se sigue guardando en
-    # el .npz (`rc_beta_medio_kpc`) para quien quiera inspeccionarlo.
-    if "rc_beta_fijo_medio_kpc" in datos:
-        rc_beta = datos["rc_beta_fijo_medio_kpc"]
-        rc_beta_sem = datos["rc_beta_fijo_std_kpc"] / np.sqrt(n_semillas)
-        p_fijo = float(datos["p_fijo"]) if "p_fijo" in datos else float("nan")
-        ax.errorbar(
-            theta, rc_beta, yerr=rc_beta_sem,
-            fmt='s--', color='seagreen', ecolor='darkgreen', capsize=5,
-            capthick=1.5, markerfacecolor='white', markeredgewidth=1.5,
-            label=rf"Ajuste beta, $p={p_fijo:.2f}$ fijo ($r_c$)",
-        )
-    elif "rc_beta_medio_kpc" in datos:
-        rc_beta = datos["rc_beta_medio_kpc"]
-        rc_beta_sem = datos["rc_beta_std_kpc"] / np.sqrt(n_semillas)
-        ax.errorbar(
-            theta, rc_beta, yerr=rc_beta_sem,
-            fmt='s--', color='seagreen', ecolor='darkgreen', capsize=5,
-            capthick=1.5, markerfacecolor='white', markeredgewidth=1.5,
-            label=r"Ajuste forma beta, p libre ($r_c$)",
-        )
-
-    # Eje y honesto: empezar en 0 en vez de recortar al rango de los datos,
-    # que exageraba visualmente una variación de pocos por ciento como si
-    # fuera una tendencia dramática (bug de la versión anterior de esta
-    # figura). Se deja un margen del 15% sobre el máximo para legibilidad.
-    techo = 1.15 * np.nanmax(np.concatenate([
-        width + width_sem,
-        rc_beta + rc_beta_sem,
-    ]))
-    ax.set_ylim(0, techo)
-
-    variacion_pct = 100 * (np.nanmax(width) - np.nanmin(width)) / np.nanmean(width)
-    ax.text(
-        0.02, 0.97,
-        f"Variación de $w$ en el barrido: {variacion_pct:.1f}%\n"
-        f"Barras: error estándar de la media (SEM), N={n_semillas} semillas.",
-        transform=ax.transAxes, fontsize=9, color="gray", va="top",
-    )
-
-    ax.set_xlabel(r"Ángulo de visión $\theta$ (grados)")
-    ax.set_ylabel("Escala transversal característica (kpc)")
-    ax.set_title("Ancho Aparente del Filamento vs. Ángulo de Visión")
-    # Posición explícita (no "best"): con la anotación ahora arriba a la
-    # izquierda, dejar que matplotlib elija podía volver a superponer la
-    # leyenda con ella en otros rangos de datos; abajo a la derecha está
-    # vacío en este gráfico (ambas curvas se achatan en la parte superior).
-    ax.legend(loc="lower right")
-
-    ruta_salida = os.path.join(DIR_PLOTS, "fig3_ancho_vs_theta.png")
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Generada: {ruta_salida}")
+    _pie(fig, "Líneas punteadas en (a): límites de fórmula cerrada para θ = 0° (σ ∝ n_e(d)) y "
+              "θ = 90° (σ² ∝ ∫n_e² dl) de un campo de paseo aleatorio sobre un perfil beta. "
+              "Semiancho: d½ = r_c·√(2^(1/p) − 1). " + _texto_parametros(datos))
+    _guardar(fig, "fig3_forma_vs_theta.png")
 
 
+# ---------------------------------------------------------------------------
+# Fig. 4 — amplitud en el eje vs theta
+# ---------------------------------------------------------------------------
 def fig4_sigma0_vs_theta():
-    """
-    sigma0(theta): la amplitud de RM en el propio eje del filamento.
-    Con un filamento de longitud FINITA (ver `model.py`), esta es la
-    cantidad con la dependencia angular más clara y físicamente más fácil
-    de explicar: a theta≈0 (filamento "de frente") la línea de visión
-    recorre casi toda la longitud del filamento a densidad casi constante;
-    a theta≈90° (filamento "de lado") solo atraviesa el perfil radial en un
-    tramo de unos pocos radios de núcleo. `w`/`r_c` (Fig. 3), en cambio,
-    describen la FORMA del perfil transversal, que para un filamento con
-    simetría cilíndrica no tiene por qué depender fuertemente de theta.
-    """
-    if not os.path.exists(ARCHIVO_MC):
-        print("Omitiendo Fig 4: Falta el archivo del barrido Monte Carlo.")
+    datos = _cargar_mc()
+    if datos is None:
         return
+    th = datos["theta_grados"]
+    s0, s0_err = datos["mc_sigma0"], datos["mc_sigma0_err"]
+    una = datos["una_realizacion_sigma0_std"]
 
-    datos = np.load(ARCHIVO_MC)
-    theta = datos["theta_grados"]
-    n_semillas = int(datos["n_semillas"]) if "n_semillas" in datos else 50
-    sigma0 = datos["sigma0_medio"]
-    sigma0_sem = datos["sigma0_std"] / np.sqrt(n_semillas)
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.fill_between(th, s0 - una, s0 + una, color=AZUL, alpha=0.12, lw=0,
+                    label="Dispersión de UN filamento (±1σ entre realizaciones)")
+    _puntos(ax, th, s0, s0_err, AZUL, "Simulación Monte Carlo (media)")
+    ax.set(xlabel=r"Ángulo de visión $\theta$ (grados)",
+           ylabel=r"$\sigma_0$, dispersión de RM en el eje (rad m$^{-2}$)",
+           title=r"Dispersión de RM en el eje vs. ángulo de visión", ylim=(0, None))
+    razon = s0[0] / s0[-1]
+    ax.text(0.97, 0.97, rf"$\sigma_0({th[0]:.0f}^\circ)\,/\,\sigma_0({th[-1]:.0f}^\circ)$ = {razon:.2f}",
+            transform=ax.transAxes, ha="right", va="top", fontsize=9.5)
+    ax.legend(loc="lower left", fontsize=9)
+    _pie(fig, f"σ_RM es lineal en B: para otro campo multiplicar por B/{float(datos['b0_ng']):.0f} nG. "
+              + _texto_parametros(datos))
+    _guardar(fig, "fig4_sigma0_vs_theta.png")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.errorbar(
-        theta, sigma0, yerr=sigma0_sem,
-        fmt='o-', color='darkorange', ecolor='saddlebrown', capsize=5,
-        capthick=1.5, markerfacecolor='white', markeredgewidth=1.5,
-    )
-    ax.set_ylim(0, 1.15 * np.nanmax(sigma0 + sigma0_sem))
-    ax.set_xlabel(r"Ángulo de visión $\theta$ (grados)")
-    ax.set_ylabel(r"$\sigma_0$ en el eje del filamento (rad/m$^2$)")
-    ax.set_title("Amplitud de RM en el Eje vs. Ángulo de Visión")
-    ax.text(
-        0.98, 0.95, f"Barras: SEM, N={n_semillas} semillas.",
-        transform=ax.transAxes, fontsize=9, color="gray", ha="right", va="top",
-    )
 
-    ruta_salida = os.path.join(DIR_PLOTS, "fig4_sigma0_vs_theta.png")
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Generada: {ruta_salida}")
+# ---------------------------------------------------------------------------
+# Fig. 5 — distribución de RM normalizada
+# ---------------------------------------------------------------------------
+def fig5_gaussianidad_rm():
+    datos = _cargar_mc()
+    if datos is None:
+        return
+    bordes = datos["hist_bordes_z"]
+    centros = 0.5 * (bordes[1:] + bordes[:-1])
+    ancho = np.diff(bordes)
+    cuentas = datos["hist_z"].sum(axis=0)
+    densidad = cuentas / (cuentas.sum() * ancho)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.bar(centros, densidad, width=ancho * 0.9, color=AZUL, alpha=0.85,
+           label="Simulación (todos los ángulos)")
+    z = np.linspace(bordes[0], bordes[-1], 400)
+    ax.plot(z, norm.pdf(z), color=GRIS, lw=2, label="Normal estándar N(0, 1)")
+    ax.set_yscale("log")
+    ax.set_ylim(1e-6, 1)
+    ax.set(xlabel=r"RM / $\sigma_{RM}$ esperado en el mismo píxel",
+           ylabel="Densidad de probabilidad",
+           title="Distribución de RM normalizada por su dispersión esperada")
+    n_total = cuentas.sum()
+    asim = np.average(datos["z_asimetria"], weights=datos["hist_z"].sum(axis=1))
+    curt = np.average(datos["z_exceso_curtosis"], weights=datos["hist_z"].sum(axis=1))
+    ax.text(0.03, 0.97,
+            f"media {np.average(datos['z_media'], weights=datos['hist_z'].sum(axis=1)):+.3f}\n"
+            f"asimetría {asim:+.3f}\nexceso de curtosis {curt:+.3f}\n"
+            f"{n_total:.1e} píxeles",
+            transform=ax.transAxes, va="top", fontsize=9.5)
+    ax.legend(loc="upper right", fontsize=9)
+    _pie(fig, "Cada valor de RM se divide entre la σ_RM esperada de su línea de visión "
+              "(faradaymr.analysis.expected). Referencia: una variable gaussiana de media cero "
+              "sigue N(0, 1), con media 0, asimetría 0 y exceso de curtosis 0.")
+    _guardar(fig, "fig5_gaussianidad_rm.png")
+
+
+# ---------------------------------------------------------------------------
+# Fig. 6 — umbral teórico de detección
+# ---------------------------------------------------------------------------
+def fig6_umbral_deteccion():
+    datos = _cargar_mc()
+    if datos is None:
+        return
+    umbral = calcular_umbral(datos)
+    th = datos["theta_grados"]
+    colores = [NARANJA, AZUL]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 5))
+    for (nombre, e), color in zip(umbral["escenarios"].items(), colores):
+        ax1.plot(th, e["resumen"]["n_por_theta"], "o-", color=color, lw=1.8, ms=6,
+                 mfc="white", mew=1.6, label=nombre)
+    ax1.axhline(N_FUENTES_STUARDI, color=TINTA_SECUNDARIA, ls="--", lw=1)
+    ax1.text(th.min(), N_FUENTES_STUARDI * 1.6,
+             f"{N_FUENTES_STUARDI} fuentes: filamento A3667/3651 (Stuardi et al. 2026)",
+             fontsize=8.5, color=TINTA_SECUNDARIA)
+    ax1.set_yscale("log")
+    ax1.set(xlabel=r"Ángulo de visión $\theta$ (grados)",
+            ylabel=f"Fuentes de fondo necesarias ({K_SIGMA:.0f}σ)",
+            title=f"(a) Fuentes para detectar B = {umbral['b0_ng']:.0f} nG")
+    ax1.legend(fontsize=9, loc="center right")
+
+    n = np.logspace(1, 9, 200)
+    i0 = int(np.argmax(datos["mc_sigma0"]))
+    for (nombre, e), color in zip(umbral["escenarios"].items(), colores):
+        b_min = campo_minimo_detectable(
+            n, datos["mc_sigma0"][i0], umbral["b0_ng"], k_sigma=K_SIGMA,
+            sigma_fondo_rad_m2=SIGMA_INTRINSECA_RAD_M2, sigma_medicion_rad_m2=e["sigma_med"],
+        )
+        ax2.plot(n, b_min, color=color, lw=1.8, label=nombre)
+    ax2.axhline(umbral["b0_ng"], color=GRIS, lw=1, ls="--")
+    ax2.text(12, umbral["b0_ng"] * 1.25, f"campo del modelo ({umbral['b0_ng']:.0f} nG)",
+             fontsize=8.5, color=GRIS)
+    ax2.axvline(N_FUENTES_STUARDI, color=TINTA_SECUNDARIA, ls="--", lw=1)
+    ax2.set_xscale("log")
+    ax2.set_yscale("log")
+    ax2.set(xlabel="Fuentes de fondo por muestra",
+            ylabel=f"Campo mínimo detectable a {K_SIGMA:.0f}σ (nG)",
+            title=rf"(b) Campo mínimo detectable vs. fuentes ($\theta={th[i0]:.0f}^\circ$)")
+    ax2.legend(fontsize=9)
+    _pie(fig, "Exceso de varianza de RM detrás del filamento frente a una región de control, "
+              "con dispersión intrínseca de 7 rad m⁻² y, en el escenario POSSUM, 12 rad m⁻² de error "
+              "de medición (Stuardi et al. 2026). Usa σ_RM en el eje, en el ángulo de σ₀ máximo.")
+    _guardar(fig, "fig6_umbral_deteccion.png")
 
 
 if __name__ == "__main__":
-    fig1_mapa_rm_ejemplo()
-    fig2_perfil_transversal_con_ajuste()
-    fig3_ancho_vs_theta()
+    fig1_mapas_rm()
+    fig2_perfiles_transversales()
+    fig3_forma_vs_theta()
     fig4_sigma0_vs_theta()
+    fig5_gaussianidad_rm()
+    fig6_umbral_deteccion()

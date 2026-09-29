@@ -7,6 +7,13 @@ from scipy.stats import binned_statistic
 from ..backend import backend_de, to_numpy
 from ..simulation.geometry import projected_axis_distance
 
+def _rms_alrededor_de_cero(valores):
+    """sqrt(<x^2>): dispersión respecto de cero, sin restar la media del bin."""
+    import numpy as np
+
+    return float(np.sqrt(np.mean(np.square(valores)))) if len(valores) else np.nan
+
+
 def radial_profile(map2d, distance_map, bins, statistic="std", mascara=None, xp=None):
     """
     Calcula un perfil estadístico (dispersión, media, etc.) bindeado por distancia.
@@ -26,8 +33,9 @@ def radial_profile(map2d, distance_map, bins, statistic="std", mascara=None, xp=
     bins : int o secuencia de escalares
         Número de bins o los bordes exactos de los bins a utilizar.
     statistic : str o callable, opcional
-        Estadística a calcular en cada bin ("std", "mean", "median", etc.).
-        Por defecto es "std" para obtener perfiles de dispersión.
+        Estadística a calcular en cada bin ("std", "mean", "median", etc.,
+        o "rms" = sqrt(<x^2>), dispersión respecto de cero sin restar la
+        media del bin). Por defecto "std", por compatibilidad.
     mascara : array-like de booleanos, opcional
         Misma forma que `map2d`. Si se da, solo los píxeles con `True` entran
         al binning; los demás se descartan por completo (no solo se ponen en
@@ -45,6 +53,9 @@ def radial_profile(map2d, distance_map, bins, statistic="std", mascara=None, xp=
     valores : array 1D
         Valor de la estadística calculada para cada bin.
     """
+    if isinstance(statistic, str) and statistic == "rms":
+        statistic = _rms_alrededor_de_cero
+
     # scipy.stats opera exclusivamente en CPU, por lo que es imperativo
     # asegurar que los arreglos se traigan desde la GPU a memoria principal
     dist_cpu = to_numpy(distance_map).ravel()
@@ -72,7 +83,8 @@ def radial_profile(map2d, distance_map, bins, statistic="std", mascara=None, xp=
     return centros, valores
 
 def transverse_rm_dispersion(
-    rm_map, filament_axis_3d, pixel_size, bins, footprint_mask=None, xp=None
+    rm_map, filament_axis_3d, pixel_size, bins, footprint_mask=None, xp=None,
+    statistic="rms",
 ):
     """
     Perfil de dispersión transversal de RM (Proyecto II): sigma_RM(d) en
@@ -92,6 +104,20 @@ def transverse_rm_dispersion(
     (en vez de calcularlo siempre adentro) porque requeriría la densidad 3D
     `ne`, que esta función no recibe; quien la llama la construye una sola
     vez con `sky_footprint_mask(ne)` y la pasa aquí.
+
+    `statistic` (por defecto "rms"): la dispersión se mide respecto de CERO,
+    sqrt(<RM^2>), no respecto de la media del bin (np.std). Un campo
+    turbulento tiene <RM> = 0 por construcción (y en una observación, tras
+    restar el foreground galáctico), así que <RM^2> sobre los píxeles de un
+    bin es un estimador INSESGADO de la varianza verdadera sigma_RM^2,
+    sin importar cuán correlacionados estén los píxeles. `np.std`, en
+    cambio, resta la media muestral del bin: cuando el bin cabe dentro de
+    una longitud de correlación del campo (el disco central a theta=0, o las
+    tiras angostas a theta chico), esa media se "come" buena parte de la
+    varianza. Con la configuración anterior del proyecto eso subestimaba
+    sigma0 hasta un 20% a theta chico e inflaba 16% el ancho a theta=0,
+    creando un "bache" espurio en la curva ancho-vs-theta. Se deja
+    `statistic="std"` disponible para reproducir el comportamiento viejo.
     """
     if xp is None:
         xp = backend_de(rm_map)
@@ -100,5 +126,5 @@ def transverse_rm_dispersion(
         rm_map.shape, filament_axis_3d, pixel_size, xp=xp
     )
     return radial_profile(
-        rm_map, distance_map, bins, statistic="std", mascara=footprint_mask, xp=xp
+        rm_map, distance_map, bins, statistic=statistic, mascara=footprint_mask, xp=xp
     )

@@ -78,8 +78,10 @@ def test_transverse_rm_dispersion_alineado_eje_x():
     filament_axis_3d = [1.0, 0.0, 0.0]
     bins = np.array([-0.5, 0.5, 1.5, 2.5])
 
+    # statistic="std": este test verifica la GEOMETRÍA (qué píxeles caen en
+    # cada banda), no el estimador; con std una banda de RM constante da 0.
     bin_centers, rm_dispersion = transverse_rm_dispersion(
-        rm_map, filament_axis_3d, pixel_size, bins, xp=np
+        rm_map, filament_axis_3d, pixel_size, bins, xp=np, statistic="std"
     )
 
     np.testing.assert_allclose(bin_centers, [0.0, 1.0, 2.0], atol=1e-7)
@@ -98,7 +100,8 @@ def test_transverse_rm_dispersion_proyeccion_z_degenerada():
 
 def test_transverse_rm_dispersion_no_duplica_logica():
     # transverse_rm_dispersion no debe tener lógica propia: es, por
-    # definición, projected_axis_distance + radial_profile(statistic="std").
+    # definición, projected_axis_distance + radial_profile (con la misma
+    # estadística; por defecto "rms").
     rng = np.random.default_rng(3)
     rm_map = rng.normal(size=(30, 30))
     filament_axis_3d = [np.sin(0.4), 0.0, np.cos(0.4)]
@@ -107,7 +110,7 @@ def test_transverse_rm_dispersion_no_duplica_logica():
 
     distance_map = projected_axis_distance(rm_map.shape, filament_axis_3d, pixel_size, xp=np)
     centros_esperados, valores_esperados = radial_profile(
-        rm_map, distance_map, bins, statistic="std"
+        rm_map, distance_map, bins, statistic="rms"
     )
     centros, valores = transverse_rm_dispersion(rm_map, filament_axis_3d, pixel_size, bins)
 
@@ -212,3 +215,14 @@ def test_dispersion_transversal_decrece_al_alejarse_del_eje_del_filamento():
     dispersion_teorica = amplitud_0 * np.exp(-centros / escala)
     assert np.allclose(dispersion, dispersion_teorica, rtol=0.1)
     assert np.all(np.diff(dispersion) < 0)
+
+def test_transverse_rm_dispersion_rms_no_resta_la_media_del_bin():
+    """Un mapa constante (RM = 3 en todos lados) tiene std = 0 por bin pero
+    RMS = 3: el estimador por defecto mide la dispersión respecto de cero."""
+    from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
+    mapa = np.full((16, 16), 3.0)
+    bordes = np.linspace(0, 8, 4)
+    _, rms = transverse_rm_dispersion(mapa, [1.0, 0.0, 0.0], 1.0, bordes)
+    _, std = transverse_rm_dispersion(mapa, [1.0, 0.0, 0.0], 1.0, bordes, statistic="std")
+    np.testing.assert_allclose(rms, 3.0)
+    np.testing.assert_allclose(std, 0.0, atol=1e-12)
