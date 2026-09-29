@@ -1,6 +1,6 @@
 """Ajuste de la medida de rotación a partir de ángulos observados.
 
-La rotación de Faraday obedece psi(lambda) = psi_0 + RM * lambda**2.
+La rotación de Faraday obedece psi(lambda^2) = psi_0 + RM * lambda**2.
 Por tanto, un ajuste lineal de psi contra lambda**2 recupera la
 pendiente RM y la ordenada al origen psi_0.
 """

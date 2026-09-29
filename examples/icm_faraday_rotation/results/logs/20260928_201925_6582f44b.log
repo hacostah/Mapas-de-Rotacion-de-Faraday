@@ -1,0 +1,50 @@
+2026-09-28 20:19:25 [INFO] faradaymr: Inicia la simulación 20260928_201925_6582f44b (log en C:\Users\liv3a\OneDrive\Escritorio\CONGRESO_2026\Mapas-de-Rotacion-de-Faraday\tests\..\examples\icm_faraday_rotation\results\logs\20260928_201925_6582f44b.log)
+2026-09-28 20:19:25 [INFO] faradaymr: Corrida 20260928_201925_6582f44b: n_spec=3, B0=1 uG, GPU=False
+2026-09-28 20:19:25 [INFO] faradaymr: Generando plasma magnetizado (campo turbulento + perfil de densidad)...
+2026-09-28 20:19:25 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0098 s
+2026-09-28 20:19:25 [INFO] faradaymr.pipeline: Integrando línea de visión (RM, I, Q, U)...
+2026-09-28 20:19:25 [INFO] faradaymr.pipeline: Aplicando respuesta instrumental (beam=50, ruido=True)...
+2026-09-28 20:19:25 [INFO] faradaymr.pipeline: Kernel 'ObservationPipeline.run' terminó en 0.0048 s
+2026-09-28 20:19:25 [INFO] faradaymr: Guardando mapas en C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_pipeline_icm_corre_de_pun0 ...
+2026-09-28 20:19:25 [INFO] faradaymr.io: Mapas guardados en C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_pipeline_icm_corre_de_pun0 (.npy, 11 arreglos).
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.9326 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1134 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1058 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1095 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1060 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1068 s
+2026-09-28 20:19:30 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1075 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1076 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1055 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1067 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1056 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1082 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1056 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1067 s
+2026-09-28 20:19:31 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1058 s
+2026-09-28 20:19:32 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1059 s
+2026-09-28 20:19:32 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1059 s
+2026-09-28 20:19:32 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.1075 s
+2026-09-28 20:19:35 [INFO] faradaymr: Corrida 20260928_201925_6582f44b completa. Todo quedó en: C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_pipeline_icm_corre_de_pun0
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0076 s
+2026-09-28 20:19:35 [INFO] faradaymr.pipeline: Integrando línea de visión (RM, I, Q, U)...
+2026-09-28 20:19:35 [INFO] faradaymr.pipeline: Kernel 'ObservationPipeline.run' terminó en 0.0027 s
+2026-09-28 20:19:35 [INFO] faradaymr.io: Mapas guardados en C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_mayor_b0_produce_mayor_di0\b0_debil (.npy, 1 arreglos).
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0053 s
+2026-09-28 20:19:35 [INFO] faradaymr.pipeline: Integrando línea de visión (RM, I, Q, U)...
+2026-09-28 20:19:35 [INFO] faradaymr.pipeline: Kernel 'ObservationPipeline.run' terminó en 0.0015 s
+2026-09-28 20:19:35 [INFO] faradaymr.io: Mapas guardados en C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_mayor_b0_produce_mayor_di0\b0_fuerte (.npy, 1 arreglos).
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0031 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0025 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0024 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0016 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0018 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0040 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Sin malla en caché para n=8 (o force=True); generando por FFT.
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0006 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Malla n=8 encontrada en caché (C:\Users\liv3a\AppData\Local\Temp\pytest-of-AngelElTrazo\pytest-4\test_sample_cached_recupera_de0\grf_484c98598e194e89.npz); se omite la FFT.
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Sin malla en caché para n=8 (o force=True); generando por FFT.
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0006 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Sin malla en caché para n=8 (o force=True); generando por FFT.
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0010 s
+2026-09-28 20:19:35 [INFO] faradaymr.fields.gaussian_random_field: Kernel 'GaussianRandomVectorField.sample' terminó en 0.0006 s

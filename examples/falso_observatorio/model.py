@@ -3,7 +3,7 @@
 from __future__ import annotations
 import numpy as np
 
-import config as cfg
+import examples.falso_observatorio.config as cfg
 from faradaymr import get_backend
 
 def construir_mapa_rm_analitico(use_gpu=None):
