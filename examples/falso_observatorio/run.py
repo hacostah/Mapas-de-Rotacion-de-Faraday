@@ -49,7 +49,7 @@ def main():
             rm_estimado = resolve_n_pi_ambiguity(
                 longitudes_onda, 
                 psi_pixel, 
-                n_candidatos=range(-3, 4)
+                n_candidatos=range(-40, 41)
             )
             rm_recuperado[i, j] = rm_estimado
             
