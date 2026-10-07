@@ -11,7 +11,10 @@ __pycache__/
 # ~30 MB de FITS/TSV descargados de Zenodo/VizieR/LAMBDA, reproducibles
 # con `data/external/descargar_datos.py` -no tiene sentido versionarlos
 # en git, inflarían el repo sin que el contenido cambie nunca.
-data/external/
+data/external/*
+# ...pero el script de descarga sí va en git: sin él un clon (p. ej. en
+# Colab) no puede bajar los datos.
+!data/external/descargar_datos.py
 
 # Logs de corridas (`results/logs/`, uno nuevo por cada ejecución de
 # `run.py` vía `faradaymr.logging_config`): crecen sin límite y no llevan
