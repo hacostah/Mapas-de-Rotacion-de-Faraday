@@ -23,3 +23,6 @@ results/logs/
 *.swp
 .vscode/
 .idea/
+
+# Salidas de las corridas (regenerables con run.py / compare_observaciones.py)
+results/

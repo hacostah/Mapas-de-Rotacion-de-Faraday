@@ -1,5 +1,4 @@
 import logging
-import os
 
 from faradaymr.logging_config import (
     configurar_logging,

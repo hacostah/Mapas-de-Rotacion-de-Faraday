@@ -63,6 +63,23 @@ def _preparar_grilla_mollweide(l_grid, b_grid, mapa, mirror_l=True):
     return lon, lat, datos[orden, :]
 
 
+def _rotular_ejes_galacticos(ax, mirror_l=True):
+    """
+    Rotula meridianos y paralelos del Mollweide en grados galácticos. Con
+    `mirror_l` el dibujo tiene l creciendo hacia la izquierda, así que la
+    marca en la posición x lleva la etiqueta l = -x (l=180 en los bordes,
+    l=0 en el centro, como en cualquier mapa galáctico publicado).
+    """
+    marcas_lon = np.arange(-120, 121, 60)
+    ax.set_xticks(np.radians(marcas_lon))
+    ax.set_xticklabels(
+        [f"{(-x if mirror_l else x) % 360:.0f}°" for x in marcas_lon], fontsize=6
+    )
+    marcas_lat = np.arange(-60, 61, 30)
+    ax.set_yticks(np.radians(marcas_lat))
+    ax.set_yticklabels([f"{y:.0f}°" for y in marcas_lat], fontsize=6)
+
+
 def mollweide_panel(
     ax,
     l_grid,
@@ -98,7 +115,12 @@ def mollweide_panel(
     lon, lat, datos = _preparar_grilla_mollweide(l_grid, b_grid, mapa, mirror_l=mirror_l)
 
     if simetrico:
-        amplitud = vmax if vmax is not None else float(np.nanmax(np.abs(datos)))
+        # Percentil 99 y no el máximo: unos pocos píxeles hacia el centro
+        # galáctico (donde la RM es un orden de magnitud mayor que en el
+        # resto del cielo) fijaban toda la escala y dejaban el cielo
+        # medio-alto en un blanco uniforme. Los píxeles que saturan se
+        # marcan con `extend` en la barra de color (ver quien llama).
+        amplitud = vmax if vmax is not None else float(np.nanpercentile(np.abs(datos), 99))
         vmin_final, vmax_final = -amplitud, amplitud
     else:
         vmin_final = vmin if vmin is not None else float(np.nanmin(datos))
@@ -120,12 +142,7 @@ def mollweide_panel(
         malla = ax.pcolormesh(
             lon, lat, datos, cmap=cmap, vmin=vmin_final, vmax=vmax_final, shading="auto"
         )
-    # Estilo "paper": sin marcas de longitud/latitud, solo el contorno
-    # ovalado de la proyección y una rejilla tenue de meridianos/paralelos
-    # (igual que Fig. 1/2/4 de Waelkens et al. 2008, que no rotulan los
-    # ejes de un mapa de cielo completo).
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
+    _rotular_ejes_galacticos(ax, mirror_l)
     ax.grid(True, alpha=0.25, linewidth=0.5)
     return malla
 
@@ -166,7 +183,11 @@ def figura_estilo_hammurabi(
     for i, panel in enumerate(paneles):
         mapa, titulo, etiqueta, cmap, simetrico = panel[:5]
         escala = panel[5] if len(panel) > 5 else "lineal"
+        opciones = panel[6] if len(panel) > 6 else {}
         ax = fig.add_subplot(1, n_paneles, i + 1, projection="mollweide")
+        # Los píxeles NaN (p.ej. ángulo indefinido donde P ~ 0) quedan en
+        # gris, distinguibles de un valor del mapa de color.
+        ax.set_facecolor("0.8")
         malla = mollweide_panel(
             ax,
             l_grid,
@@ -176,10 +197,12 @@ def figura_estilo_hammurabi(
             simetrico=simetrico,
             mirror_l=mirror_l,
             escala=escala,
+            **opciones,
         )
         ax.set_title(titulo, fontsize=10, pad=10)
         cbar = fig.colorbar(
-            malla, ax=ax, orientation="horizontal", fraction=0.055, pad=0.06, aspect=28
+            malla, ax=ax, orientation="horizontal", fraction=0.055, pad=0.06, aspect=28,
+            extend="both" if simetrico else "neither",
         )
         cbar.set_label(etiqueta, fontsize=8)
         cbar.ax.tick_params(labelsize=7)
@@ -192,94 +215,6 @@ def figura_estilo_hammurabi(
     fig.savefig(ruta_completa, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return ruta_completa
-
-
-def figuras_individuales_estilo_hammurabi(
-    ruta_destino: str,
-    l_grid,
-    b_grid,
-    paneles: Sequence[tuple],
-    prefijo: str = "figura_1",
-    mirror_l: bool = True,
-    figsize: tuple = (7.5, 5.2),
-):
-    """
-    Una figura Mollweide POR observable, en vez de los N paneles pequeños
-    en una sola fila de `figura_estilo_hammurabi`: cada `.png` sale más
-    grande, con más detalle visible (un panel de 4.2x3.2" dentro de una
-    fila de 4 apenas deja ver la estructura fina del disco; a tamaño
-    completo sí).
-
-    `paneles`: misma convención que en `figura_estilo_hammurabi`
-    -secuencia de (mapa2d, titulo, etiqueta_barra, cmap, simetrico[,
-    escala]) más un nombre de archivo corto al final: en vez de eso, aquí
-    cada tupla es (mapa2d, titulo, etiqueta_barra, cmap, simetrico,
-    nombre_corto[, escala]) porque cada panel necesita su propio nombre de
-    archivo, no solo su contenido.
-
-    Guarda cada panel como `<ruta_destino>/<prefijo>_<nombre_corto>.png` y
-    devuelve la lista de rutas escritas (mismo orden que `paneles`).
-    """
-    import matplotlib.pyplot as plt
-
-    rutas = []
-    for panel in paneles:
-        mapa, titulo, etiqueta, cmap, simetrico, nombre_corto = panel[:6]
-        escala = panel[6] if len(panel) > 6 else "lineal"
-
-        fig = plt.figure(figsize=figsize)
-        ax = fig.add_subplot(1, 1, 1, projection="mollweide")
-        malla = mollweide_panel(
-            ax, l_grid, b_grid, mapa, cmap=cmap, simetrico=simetrico,
-            mirror_l=mirror_l, escala=escala,
-        )
-        ax.set_title(titulo, fontsize=13, pad=14)
-        cbar = fig.colorbar(
-            malla, ax=ax, orientation="horizontal", fraction=0.055, pad=0.07, aspect=32
-        )
-        cbar.set_label(etiqueta, fontsize=10)
-        cbar.ax.tick_params(labelsize=9)
-
-        nombre_archivo = f"{prefijo}_{nombre_corto}.png"
-        ruta_completa = os.path.join(ruta_destino, nombre_archivo)
-        fig.tight_layout()
-        fig.savefig(ruta_completa, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        rutas.append(ruta_completa)
-
-    return rutas
-
-
-def mapas_individuales_estilo_hammurabi(
-    ruta_destino: str,
-    l_grid,
-    b_grid,
-    rm_map,
-    i_map,
-    q_map,
-    u_map,
-    prefijo: str = "figura_1",
-    umbral_pol: float = 1e-3,
-):
-    """
-    Versión "separada" de `mapa_sintetico_estilo_hammurabi`: los mismos
-    cuatro observables (I, P, ángulo de polarización, RM), pero cada uno
-    en su propio archivo en vez de cuatro paneles pequeños en una sola
-    figura -pedido explícito: más fácil de inspeccionar/insertar cada
-    observable por separado (p.ej. en un póster o una sección distinta de
-    un capítulo), sin perder detalle por el tamaño reducido del panel.
-    """
-    p_map = np.sqrt(np.asarray(q_map) ** 2 + np.asarray(u_map) ** 2)
-    psi_obs = 0.5 * np.arctan2(u_map, q_map)
-    psi_obs = np.where(p_map >= umbral_pol * np.nanmax(p_map), psi_obs, np.nan)
-
-    paneles = [
-        (i_map, "Intensidad total sincrotrón", "u.a.", "inferno", False, "intensidad", "log"),
-        (p_map, "Intensidad polarizada", "u.a.", "inferno", False, "intensidad_polarizada", "log"),
-        (psi_obs, "Ángulo de polarización observado", "rad", "twilight", False, "angulo_polarizacion"),
-        (rm_map, "Medida de Rotación (RM)", r"rad m$^{-2}$", "RdBu_r", True, "rm"),
-    ]
-    return figuras_individuales_estilo_hammurabi(ruta_destino, l_grid, b_grid, paneles, prefijo=prefijo)
 
 
 def angulo_polarizacion_enmascarado(q_map, u_map, umbral_pol: float = 1e-3):
@@ -312,8 +247,8 @@ def mapa_sintetico_estilo_hammurabi(
     u_map,
     nombre_archivo: str = "figura_1_mapa_de_cielo_mollweide.png",
     titulo_figura: str = (
-        "Foreground galáctico sintético (disco + brazos espirales + campo "
-        "regular espiral + turbulencia)"
+        "Foreground galáctico sintético a 1.4 GHz (disco + brazos espirales + "
+        "campo regular de disco y halo + turbulencia)"
     ),
     umbral_pol: float = 1e-3,
 ):
@@ -326,11 +261,19 @@ def mapa_sintetico_estilo_hammurabi(
     `los_raytrace.sky_map`.
     """
     p_map, psi_obs = angulo_polarizacion_enmascarado(q_map, u_map, umbral_pol=umbral_pol)
+    # La emisividad no está calibrada en unidades físicas (ver
+    # `faradaymr.observational`): se normaliza al máximo de I para que la
+    # escala diga algo (contraste y P/I), no un número arbitrario.
+    i_max = float(np.nanmax(i_map))
 
     paneles = [
-        (i_map, "Intensidad total", "u.a.", "inferno", False, "log"),
-        (p_map, "Intensidad polarizada", "u.a.", "inferno", False, "log"),
-        (psi_obs, "Ángulo de polarización", "rad", "twilight", False),
+        (np.asarray(i_map) / i_max, "Intensidad total", r"$I\,/\,I_{\rm max}$", "inferno", False, "log"),
+        (p_map / i_max, "Intensidad polarizada", r"$P\,/\,I_{\rm max}$", "inferno", False, "log"),
+        # Cíclico (twilight) y con rango fijo: el ángulo vale módulo 180°,
+        # así que -90° y +90° son el mismo color.
+        (np.degrees(psi_obs), "Ángulo de polarización (IAU)",
+         rf"grados (gris: $P < 10^{{{np.log10(umbral_pol):.0f}}}\,P_{{\rm max}}$)", "twilight", False,
+         "lineal", {"vmin": -90.0, "vmax": 90.0}),
         (rm_map, "Medida de Rotación (RM)", r"rad m$^{-2}$", "RdBu_r", True),
     ]
     return figura_estilo_hammurabi(

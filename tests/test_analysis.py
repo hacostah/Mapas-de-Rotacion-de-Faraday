@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from faradaymr.analysis import radial_profile, transverse_rm_dispersion
 
@@ -130,3 +129,26 @@ def test_radial_profile_acepta_bins_como_entero_o_como_bordes_explicitos():
     assert valores_auto.shape == (4,)
     assert np.allclose(centros_auto, centros_manual)
     assert np.allclose(valores_auto, valores_manual, equal_nan=True)
+
+
+def test_espectro_isotropico_recupera_parseval_y_pendiente_de_kolmogorov():
+    # El espectro de energía debe (a) integrar a <|B|^2> y (b) tener la
+    # pendiente -n impuesta dentro de la banda con turbulencia.
+    from faradaymr import GaussianRandomVectorField
+    from faradaymr.analysis.spatial_stats import isotropic_energy_spectrum
+
+    n, dx = 48, 0.5
+    campo = GaussianRandomVectorField(
+        n=n, dx=dx, spectral_index=5.0 / 3.0, scale_min=1.0, scale_max=6.0
+    )
+    bx, by, bz = campo.sample(use_gpu=False, rng=np.random.RandomState(1))
+
+    k, e_k = isotropic_energy_spectrum(bx, by, bz, dx)
+
+    dk = k[1] - k[0]
+    varianza = float(np.mean(bx**2 + by**2 + bz**2))
+    assert np.isclose(np.sum(e_k * dk), varianza, rtol=1e-6)
+
+    banda = (k > np.pi / 6.0) & (k < np.pi / 1.0)
+    pendiente = np.polyfit(np.log(k[banda]), np.log(e_k[banda]), 1)[0]
+    assert abs(pendiente + 5.0 / 3.0) < 0.35

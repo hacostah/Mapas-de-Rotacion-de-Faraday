@@ -76,10 +76,27 @@ NE0 = 0.03 * (u.cm**-3)
 # Escala radial del disco ionizado delgado: orden de magnitud de la
 # componente de disco fino de NE2001 (Cordes & Lazio 2002).
 SCALE_RADIAL_NE = 3.5 * u.kpc
-# Escala vertical del disco ionizado (Gaensler et al. 2008).
+# Escala vertical del disco ionizado: la del disco grueso de NE2001
+# (H1 = 0.95 kpc, n1 = 0.033 cm^-3; Cordes & Lazio 2002), coherente con
+# NE0. Gaensler et al. (2008) obtienen una escala mayor (1.8 kpc) pero con
+# n0 = 0.014 cm^-3: lo que fija la RM y la DM hacia el polo es la columna
+# n0 * h, ~25-30 pc cm^-3 en los dos casos (la DM polar de este modelo,
+# 31 pc cm^-3, se valida en `run.py`).
 SCALE_HEIGHT_NE = 1.0 * u.kpc
+# Forma radial del disco de n_e. Una exponencial normalizada en R_solar
+# (la opción "exponencial") sube a ~0.3 cm^-3 en el centro y, con el realce
+# de los brazos, pasa de 1 cm^-3: ~10x lo que da NE2001 en el disco
+# interior, y eso inflaba la RM de la línea de visión al centro galáctico
+# hasta ~2000 rad/m^2. Se usa la forma del disco grueso de NE2001 (Cordes &
+# Lazio 2002): cos(pi R / 2A) con A = 17.5 kpc, casi plana adentro.
+NE_RADIAL_PROFILE = "ne2001"
+NE_RADIAL_CUTOFF = 17.5 * u.kpc
 # Número de brazos espirales (modelo de 4 brazos, Vallée 2016).
 N_ARMS = 4
+# Radio donde empiezan los brazos: el extremo de la barra, ~3 kpc (Vallée
+# 2016). Sin él, las espirales logarítmicas se amontonan hacia el centro y
+# n_e sube a 0.2 cm^-3 en R < 1 kpc por solapamiento de brazos vecinos.
+ARM_R_MIN = 3.0 * u.kpc
 # Ancho gaussiano (1 sigma) del realce de densidad cerca de cada brazo.
 # No hay, todavía, una referencia cuantitativa específica para este
 # parámetro -queda como uno de los números "sin anclaje fino" que señala
@@ -104,59 +121,150 @@ ARM_WIDTH = 0.5 * u.kpc
 # del alcance de este modelo de juguete, ver docstring de
 # `faradaymr.los_raytrace.direction_from_galactic`).
 ARM_PHASE0_DEG = 180.0 / N_ARMS
-# Pitch angle observacional (medido desde la dirección azimutal, no
-# radial -ver docstring de `faradaymr.simulation.galactic_disk`), espiral
-# trailing (signo negativo): Vallée (2015, 2016).
-PITCH_ANGLE_DEG = -12.0
+# Pitch angle (medido desde la dirección azimutal, tan(p) = B_R/B_phi, con
+# phi creciendo en sentido antihorario visto desde el polo norte, que es
+# lo que da arctan2(y, x) con l=90 hacia +y). La Galaxia rota en sentido
+# HORARIO visto desde el polo norte (el Sol, en (-R0, 0), se mueve hacia
+# +y = l=90) y sus brazos son "trailing": al alejarse del centro la
+# espiral se retrasa, o sea r CRECE con phi antihorario => tan(p) > 0.
+# Vallée escribe -12 a -13 grados porque mide el azimut en sentido horario;
+# en las coordenadas de este código el mismo brazo tiene p = +12 grados.
+# Comprobado con las tangentes reales de Scutum-Crux (l=+31 y l=310): los
+# puntos tangentes quedan en (R=4.1 kpc, phi=121) y (R=6.1 kpc, phi=220),
+# es decir dr/(r dphi) ~ +0.23 = tan(13 grados). Con -12 (como estaba) los
+# brazos se enrollaban al revés (leading).
+PITCH_ANGLE_DEG = 12.0
 
-# --- Campo magnético regular (espiral logarítmica) ---
-# CALIBRADO estadísticamente (no solo orden de magnitud de literatura)
-# contra los dos conjuntos de datos reales de RM ya cargados por
-# `faradaymr.observational` -ver `calibrar_amplitud_campo.py` para el
-# método completo (mínimos cuadrados en log-espacio sobre el perfil
-# RMS(RM) vs |b| de Oppermann & Enßlin 2012, con validación cruzada
-# independiente contra el catálogo puntual NVSS de Taylor+2009). El valor
-# original (2.0 uG, "mismo orden que JF12/Cordes & Lazio") sobreestimaba
-# la RM real por un factor de ~3.7x (alpha=0.269 calibrado = 1/3.7); con
-# `B0_TURBULENTO` (ver más abajo) escalado por el MISMO factor para
-# preservar la razón regular/turbulento (ver docstring de
-# `calibrar_amplitud_campo.py` sobre por qué un factor común, no
-# independiente).
+# --- Campo magnético: valores de literatura y factores efectivos ---
+# Todas las amplitudes de campo de esta sección son las publicadas (disco:
+# Beck 2001 / JF12; halo: JF12; turbulencia: Beck 2001, Sun et al. 2008).
+# Dos factores, declarados aparte, las convierten en valores efectivos
+# para esta malla (`model.construir_escenario` los aplica):
 #
-# TENSIÓN CON LA LITERATURA, declarada explícitamente (no escondida): 0.54
-# uG es notablemente más bajo que el ~2 uG de JF12 para el disco Galáctico
-# real. La lectura más honesta no es "JF12 está mal" sino que este modelo
-# de juguete (disco+brazos idealizados, sin reversión de campo, sin burbuja
-# local, con `ARM_WIDTH` sub-resuelta -ver nota en la sección de malla más
-# arriba-) integra RM de forma sistemáticamente más eficiente que la Vía
-# Láctea real a lo largo de cada línea de visión completa hasta el borde
-# de la caja; la calibración compensa esa diferencia estructural, no
-# necesariamente mide "el B real". Corregir `ARM_WIDTH` (aumentar la
-# resolución de malla, ver nota arriba) es el candidato más probable para
-# cerrar esta tensión sin necesitar un B tan bajo -tarea pendiente,
-# deliberadamente no resuelta en esta calibración (ver
-# `calibrar_amplitud_campo.py`, docstring del módulo).
-B0_REGULAR = 2.0 * 0.269 * u.microgauss
+# - FACTOR_TURBULENCIA (derivado en `config.py`, no ajustado): la RM de un
+#   campo aleatorio crece como B_rms * sqrt(L_coh * L). La turbulencia de
+#   este modelo tiene longitud integral ~1.6 kpc (espectro de Kolmogorov
+#   entre LAMBDA_MIN y LAMBDA_MAX, limitado por la malla), contra ~0.1 kpc
+#   en el ISM real (L_COHERENCIA_ISM, Haverkorn et al. 2008). Para que su
+#   RM sea la de una turbulencia real de 3 µG, la amplitud se multiplica por
+#   sqrt(L_COHERENCIA_ISM / L_integral_modelo) ≈ 0.25.
+#
+# - FACTOR_CAMPO_REGULAR (calibrado con `calibrar_amplitud_campo.py`): un
+#   único factor para todo el campo regular (disco + halo), ajustado por
+#   mínimos cuadrados en log sobre el perfil RMS(RM) vs |b| de Oppermann &
+#   Enßlin (2012), con el catálogo NVSS de Taylor+2009 como validación
+#   cruzada. Absorbe lo que la geometría de juguete no tiene (reversiones
+#   del campo entre brazos, que cancelan RM en el plano) y el n_e del
+#   modelo, que no es el de NE2001 con el que JF12 ajustó sus amplitudes.
+#
+# Antes había un solo factor 0.454 para todo; con eso la turbulencia de
+# kpc dominaba la RM de alta latitud (2.5x la observada en el polo) y
+# el campo regular quedaba castigado por un exceso que no era suyo.
+# Última calibración (con la inversión interior, ANILLOS_INVERSION_CAMPO,
+# y el núcleo de RADIO_NUCLEO_B / RADIO_SIN_CAMPO_B): 0.80 (Oppermann) y
+# 1.25 (NVSS), media geométrica 1.00. Es decir, con la geometría completa
+# las amplitudes publicadas del campo regular no necesitan reescalarse.
+FACTOR_CAMPO_REGULAR = 1.0
+
+# Disco (espiral logarítmica).
+B0_REGULAR = 2.0 * u.microgauss
 # Escala radial de decaimiento del campo regular (mismo orden que el
 # disco de JF12).
 SCALE_RADIAL_B = 5.0 * u.kpc
-# Espesor del disco magnetizado (JF12).
-SCALE_HEIGHT_B = 1.0 * u.kpc
-HANDEDNESS = 1  # sentido de enrollamiento; no fijado por ninguna
-                 # referencia particular en este toy model (ver nota en
-                 # `run.py` sobre qué falta calibrar).
+# Espesor del disco magnetizado: h_disk = 0.40 kpc de JF12. Antes era
+# 1 kpc (atribuido a JF12 por error); con el halo de JF12 encima, el disco
+# tiene que cortarse donde empieza el halo, o su RM simétrica en b tapa la
+# antisimetría norte-sur a latitudes medias. A dx = 0.5 kpc queda resuelto
+# por ~1 celda: la integral a lo largo del rayo se conserva, el detalle no.
+SCALE_HEIGHT_B = 0.4 * u.kpc
+# Forma del corte vertical del disco: la de JF12, 1 - L(z, h_disk, w_disk)
+# con w_disk = 0.27 kpc, el complemento exacto de cómo se enciende el halo
+# toroidal (ALTURA_DISCO_HALO/ANCHO_DISCO_HALO, más abajo). Con una
+# exponencial exp(-|z|/h) el disco se apagaba antes de que el halo
+# encendiera y |B| regular caía a 0.2 de su valor en z=0 a |z|~0.5 kpc
+# para volver a subir. La columna integrada (~h por lado) es la misma.
+ANCHO_VERTICAL_B = 0.27 * u.kpc
+# Galaxia interior. La exponencial en R hacía crecer el campo del disco a
+# ~9 µG en el centro, y con la inversión interior daba RM de ±300-400
+# rad/m^2 hacia |l| < 20° (observado: 0 ± 100). Los modelos de referencia
+# no extrapolan así: Sun et al. (2008) dejan |B| constante dentro de
+# R_c = 5 kpc, y JF12 no tienen campo de disco dentro de 3 kpc (la región
+# de la barra). Con las dos cosas la RMS en |l| < 30°, |b| < 5° baja de
+# 616 a 325 rad/m^2 (observado: 210) y FACTOR_CAMPO_REGULAR queda en 1.0.
+RADIO_NUCLEO_B = 5.0 * u.kpc
+RADIO_SIN_CAMPO_B = 3.0 * u.kpc
+# Sentido del campo regular: -1 = horario visto desde el polo norte
+# (B_phi < 0), que es el del campo local: apunta hacia l ~ 90 grados
+# (Manchester 1974; Han et al. 2006), con B_R < 0 (espirando hacia
+# adentro, l algo menor que 90). Con B_phi > 0 y p > 0 el campo local
+# apuntaría hacia l ~ 270, invirtiendo el signo global de la RM. Junto con
+# p > 0 da B_R = -sin(p)|B| < 0, como se espera para brazos trailing.
+HANDEDNESS = -1
+# Inversión del campo del disco en la Galaxia interior. Sin ella el campo
+# es horario en todo el disco y la RM en el plano sale con el signo
+# contrario al observado en el primer cuadrante (-345 contra +21 rad/m^2
+# en l=20-90, |b|<5), con correlación nula contra Oppermann+2012. La RM de
+# pulsares y fuentes extragalácticas muestra una inversión de gran escala
+# entre el brazo local y el de Sagitario-Carina (Brown et al. 2007; Van
+# Eck et al. 2011): adentro el campo es antihorario. Se modela como una
+# sola inversión para R < 7 kpc (~1 kpc dentro del círculo solar, donde
+# la ubican esos trabajos). Se compararon también el anillo ASS+RING de
+# Sun et al. (2008), 6-7.5 kpc literal y escalado a R_sol=8 kpc: dejan el
+# primer cuadrante con el signo equivocado (correlación en |b|<10° de
+# 0.11-0.19, contra 0.43 con la inversión única).
+ANILLOS_INVERSION_CAMPO = ((0.0 * u.kpc, 7.0 * u.kpc),)
+
+# --- Campo regular de halo (Jansson & Farrar 2012, "JF12") ---
+# Ver `faradaymr.fields.halo_field`. Sin halo el campo regular es plano y
+# simétrico respecto al disco, y el modelo no puede dar la antisimetría
+# norte-sur de la RM ni la componente vertical que Planck ve en
+# polarización. Valores de la tabla 1 de JF12.
+USAR_CAMPO_HALO = True
+# Halo toroidal (JF12, ec. 7).
+B_HALO_NORTE = 1.4 * u.microgauss
+B_HALO_SUR = -1.1 * u.microgauss
+R_HALO_NORTE = 9.22 * u.kpc
+R_HALO_SUR = 16.7 * u.kpc
+ANCHO_HALO = 0.20 * u.kpc
+ESCALA_ALTURA_HALO = 5.3 * u.kpc
+ALTURA_DISCO_HALO = 0.40 * u.kpc
+ANCHO_DISCO_HALO = 0.27 * u.kpc
+# Sentido global en las coordenadas de este código (JF12 mide phi con el
+# eje x del centro hacia el Sol, al revés que acá). Se fija con el signo
+# observado de la RM de Oppermann et al. (2012) hacia la Galaxia interior
+# a 10° < |b| < 45°: positiva al norte y negativa al sur en 0° < l < 90°,
+# al revés en 270° < l < 360°. Con +1 el campo regular reproduce los
+# cuatro signos; con -1, solo dos. El mapa total puede fallar en alguno:
+# la turbulencia de escala kpc de esta malla aporta ±10-20 rad/m^2 por
+# cuadrante según la semilla (varianza de realización, no del campo regular).
+SENTIDO_HALO_TOROIDAL = 1
+# Campo en X (JF12, ec. 8-11).
+B_CAMPO_X = 4.6 * u.microgauss
+ELEVACION_CAMPO_X_DEG = 49.0
+R_CRITICO_CAMPO_X = 4.8 * u.kpc
+R_ESCALA_CAMPO_X = 2.9 * u.kpc
 
 # --- Turbulencia (componente aleatoria del campo magnético) ---
-# Amplitud RMS comparable a la del campo regular (razón preservada en
-# 3:2, la relación estándar reportada para el ISM: Beck 2001; Sun et al.
-# 2008 adoptan 3 uG en su modelo de referencia, ver Waelkens et al. 2008
-# sec. 5.2) -escalado por el MISMO factor de calibración que
-# `B0_REGULAR` (0.269, ver esa nota para el método y la tensión declarada
-# con la literatura).
-B0_TURBULENTO = 3.0 * 0.269 * u.microgauss
+# RMS local de la literatura: 3 µG (Beck 2001; Sun et al. 2008, ver
+# Waelkens et al. 2008 sec. 5.2). El valor efectivo que usa el modelo es
+# este por FACTOR_TURBULENCIA (ver arriba y `config.py`).
+B0_TURBULENTO = 3.0 * u.microgauss
+# Longitud de coherencia de la turbulencia del ISM real (escala externa
+# ~0.1 kpc, Haverkorn et al. 2008).
+L_COHERENCIA_ISM = 0.1 * u.kpc
 # Espectro de Kolmogorov, el estándar adoptado para la turbulencia del
 # ISM galáctico (Han et al. 2004; Waelkens et al. 2008 sec. 5.2).
 SPECTRAL_INDEX = 5.0 / 3.0
+# Envolvente espacial de la turbulencia. Antes tenía la misma amplitud en
+# toda la caja, también a 10 kpc sobre el disco, donde su RM (con escalas
+# de varios kpc) tapaba la antisimetría norte-sur que da el halo regular.
+# Se usa la forma del campo aleatorio de halo de Jansson & Farrar (2012b,
+# ApJ 761, L11): exp(-R/r0) exp(-z^2 / 2 z0^2), con r0 = 10.97 kpc y
+# z0 = 2.84 kpc. B0_TURBULENTO es el RMS en la vecindad solar
+# (7 < R < 9 kpc, |z| < 0.5 kpc).
+USAR_ENVOLVENTE_TURBULENCIA = True
+ESCALA_RADIAL_TURBULENCIA = 10.97 * u.kpc
+ESCALA_ALTURA_TURBULENCIA = 2.84 * u.kpc
 # Escala de disipación: limitada por la resolución de la malla (2 celdas),
 # no una escala física real medida -mismo criterio que ya usa
 # `icm_faraday_rotation/config_fisica.py` para LAMBDA_MIN.
@@ -176,8 +284,22 @@ NE_REL_FRACCION = 0.01
 
 # --- Observación ---
 NU = 1.4e9 * u.Hz  # banda L, igual que el ejemplo del ICM
-C = 3e8 * (u.m / u.s)
+C = 299792458.0 * (u.m / u.s)
 LAMBDA_ONDA = C / NU
+
+# Segunda frecuencia, para validar contra Planck LFI "30 GHz": 28.4 GHz es
+# la frecuencia central efectiva de ese canal (Planck 2018 results II,
+# tabla 4). A esta frecuencia la rotación de Faraday es despreciable
+# (RM ~ 100 rad/m^2 gira ~0.6°), así que Q/U miden la geometría del campo
+# sin la despolarización que sí hay a 1.4 GHz.
+NU_PLANCK = 28.4e9 * u.Hz
+LAMBDA_PLANCK = C / NU_PLANCK
+# Temperatura del CMB (Fixsen 2009), para pasar de K_CMB a K_RJ.
+T_CMB = 2.7255 * u.K
+# Realizaciones de la turbulencia a 28.4 GHz para estimar la varianza
+# galáctica (Planck Int. XLII 2016, sec. 3.4.1). No es un parámetro físico:
+# más realizaciones dan una estimación menos ruidosa y cuestan más.
+N_REALIZACIONES_VARIANZA_GALACTICA = 8
 
 # --- Mapa de cielo (l, b) ---
 # Se recorta cerca de los polos exactos por la singularidad de
@@ -219,3 +341,10 @@ else:
 # que un T4 (A100, L4); bajarlo si la GPU asignada por Colab tiene menos
 # memoria y el cómputo falla por falta de memoria.
 PIXEL_CHUNK_SIZE = 16384 if PERFIL_RESOLUCION == "exhaustivo" else 8192
+# En el perfil exhaustivo cada píxel del lote ocupa ~220 KB de GPU (~1300
+# muestras por rayo, cinco campos interpolados más los acumulados), así
+# que 16384 píxeles son ~3.6 GB por lote. `Faraday_MR_Colab.ipynb` elige
+# el tamaño según la memoria libre de la GPU asignada y lo pasa con esta
+# variable de entorno (antes de importar este módulo).
+if os.environ.get("FARADAYMR_PIXEL_CHUNK_SIZE"):
+    PIXEL_CHUNK_SIZE = int(os.environ["FARADAYMR_PIXEL_CHUNK_SIZE"])

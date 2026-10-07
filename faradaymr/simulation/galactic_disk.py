@@ -54,7 +54,7 @@ from dataclasses import dataclass
 
 
 def spiral_arm_density_factor(
-    xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, phase0=0.0, xp=None
+    xx, yy, pitch_angle, r0, n_arms=4, arm_width=0.5, phase0=0.0, xp=None, r_min=None
 ):
     """
     Factor multiplicativo (>=1) que realza la densidad cerca de `n_arms`
@@ -96,6 +96,12 @@ def spiral_arm_density_factor(
         Sagitario-Carina y Perseo), no encima de un brazo. Ver
         `config_fisica.ARM_PHASE0_DEG` para cómo se fija este parámetro en
         la práctica para evitar esa coincidencia.
+    r_min : radio donde empiezan los brazos (None: en todo el disco). Las
+        espirales logarítmicas se enrollan sin fin hacia el centro y, por
+        debajo de ~2 kpc, brazos vecinos quedan a menos de `arm_width` y se
+        suman (n_e x5 en R < 1 kpc). En la Vía Láctea los brazos nacen en
+        el extremo de la barra (~3 kpc; Vallée 2016); el realce se apaga
+        hacia adentro con una logística de ancho `arm_width`/2.
     """
     if xp is None:
         import numpy as xp
@@ -120,6 +126,9 @@ def spiral_arm_density_factor(
         delta = xp.mod(phi - phi_brazo + xp.pi, 2.0 * xp.pi) - xp.pi
         distancia_fisica = xp.abs(delta) * r_seguro
         factor = factor + xp.exp(-0.5 * (distancia_fisica / arm_width) ** 2)
+    if r_min is not None:
+        encendido = 1.0 / (1.0 + xp.exp(-(r - r_min) / (0.5 * arm_width)))
+        factor = 1.0 + (factor - 1.0) * encendido
     return factor
 
 
@@ -164,6 +173,10 @@ class GalacticDiskProfile:
         `config_fisica.ARM_PHASE0_DEG` para la nota sobre por qué NO
         dejarlo en 0.0 cuando `n_arms` es par y el observador está en
         phi=180°, como en `model.construir_escenario`).
+    radial_profile, radial_cutoff : forma de la envolvente radial (ver
+        `_radial_factor`); por defecto la exponencial histórica.
+    arm_r_min : radio donde empiezan los brazos (ver
+        `spiral_arm_density_factor`, parámetro `r_min`).
     arm_contrast : si False, `density` devuelve solo la envolvente
         axisimétrica (factor espiral fijo en 1), sin brazos. Útil como
         caso límite para pruebas y para aislar el efecto de los brazos al
@@ -179,6 +192,34 @@ class GalacticDiskProfile:
     arm_width: float = 0.5
     phase0: float = 0.0
     arm_contrast: bool = True
+    radial_profile: str = "exponencial"
+    radial_cutoff: float = 17.0
+    arm_r_min: float | None = None
+
+    def _radial_factor(self, r, xp):
+        """
+        Envolvente radial, normalizada a 1 en r0.
+
+        "exponencial": exp(-(R-r0)/scale_radial). Es la forma que se usa
+            para la distribución de estrellas/gas neutro, pero para n_e
+            diverge hacia el centro (a R=0 vale exp(r0/scale_radial) ~ 10
+            veces el valor solar), algo que ningún modelo de n_e reporta.
+        "ne2001": cos(pi R / 2A) / cos(pi r0 / 2A) para R < A y 0 fuera,
+            la forma del disco grueso de NE2001 (Cordes & Lazio 2002,
+            A = 17.5 kpc): casi plana en el interior del disco y con un
+            corte suave en el borde. `radial_cutoff` es A y `scale_radial`
+            no se usa.
+        """
+        if self.radial_profile == "exponencial":
+            return xp.exp(-(r - self.r0) / self.scale_radial)
+        if self.radial_profile == "ne2001":
+            a = self.radial_cutoff
+            factor = xp.cos(xp.pi * r / (2.0 * a)) / xp.cos(xp.pi * self.r0 / (2.0 * a))
+            return xp.where(r < a, factor, 0.0)
+        raise ValueError(
+            f"radial_profile={self.radial_profile!r} no reconocido "
+            "(válidos: 'exponencial', 'ne2001')."
+        )
 
     def density(self, xx, yy, zz, xp=None):
         if xp is None:
@@ -186,7 +227,7 @@ class GalacticDiskProfile:
         r = xp.sqrt(xx**2 + yy**2)
         envolvente = (
             self.n_e0
-            * xp.exp(-(r - self.r0) / self.scale_radial)
+            * self._radial_factor(r, xp)
             * xp.exp(-xp.abs(zz) / self.scale_height)
         )
         if not self.arm_contrast:
@@ -200,6 +241,7 @@ class GalacticDiskProfile:
             arm_width=self.arm_width,
             phase0=self.phase0,
             xp=xp,
+            r_min=self.arm_r_min,
         )
         return envolvente * factor
 

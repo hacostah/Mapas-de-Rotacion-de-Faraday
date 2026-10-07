@@ -1,107 +1,131 @@
 """
-Calibración estadística de la amplitud del campo magnético (`B0_REGULAR`,
-`B0_TURBULENTO`) contra los dos conjuntos de datos reales de RM ya
-cargados por `faradaymr.observational`: Oppermann & Enßlin (2012, mapa de
-cielo completo) y Taylor, Stil & Sunstrum (2009, catálogo NVSS de fuentes
-puntuales).
+Calibración estadística de `FACTOR_CAMPO_REGULAR` (config_fisica.py): el
+factor único que lleva las amplitudes de literatura del campo regular
+(disco + halo de JF12) a valores efectivos para este modelo de juguete.
 
-Por qué hace falta (ver `results/foreground_galactico/resumen_comparacion_observacional.json`
-antes de esta calibración): `B0_REGULAR`/`B0_TURBULENTO` en `config_fisica.py`
-eran valores de orden de magnitud tomados de la literatura (Jansson &
-Farrar 2012, Cordes & Lazio 2002), nunca ajustados contra un dato real -el
-primer chequeo cuantitativo (esta sesión) mostró que el modelo sobreestima
-la RM real por un factor de varias veces en TODO el rango de latitud.
+Solo se calibra el campo regular. La amplitud efectiva de la turbulencia
+no se ajusta: se deriva de su longitud de coherencia (`FACTOR_TURBULENCIA`
+en `config.py`, ver config_fisica.py). Ajustar las dos a la vez contra el
+mismo perfil de RM no las separa: ambas suben la RMS en todas las
+latitudes.
 
-Por qué un solo factor de escala (no un ajuste independiente de cada
-parámetro): RM es una integral LINEAL en el campo magnético a lo largo de
-la línea de visión (`faradaymr.los.rotation_measure`); con una semilla de
-campo turbulento fija, escalar `B0_REGULAR` y `B0_TURBULENTO` por el MISMO
-factor `alpha` escala el mapa de RM completo por exactamente ese mismo
-`alpha` (no hace falta volver a correr el ray tracing para explorar
-distintos `alpha`: `RM(alpha) = alpha * RM(alpha=1)`, verificado en
-`tests/test_calibracion_amplitud.py`). Se preserva la razón
-`B0_TURBULENTO/B0_REGULAR` (2003/2004 = 3/2 en el config original) porque
-es la relación físicamente motivada -orden de magnitud comparable, la
-razón estándar reportada para el ISM (Beck 2001)- que no hay datos en este
-proyecto para reajustar independientemente (no hay una comparación real de
-grado de polarización/despolarización todavía, que es lo que
-distinguiría la contribución de cada componente por separado).
+Método. La RM es lineal en B, así que con la semilla de turbulencia fija
 
-Método: para cada banda de |b| del perfil `RMS(RM) vs |b|`
-(`faradaymr.observational.perfil_estadistico_vs_latitud`, ver
-`comparar_con_oppermann`), la razón observado/modelo en escala log es
-`log(alpha) = log(rms_obs_i) - log(rms_modelo_i)` -el modelo actual es
-`alpha=1`-; el `alpha` que minimiza la suma de cuadrados de ese residuo
-sobre todas las bandas (ponderada por cuántos píxeles informan cada banda)
-tiene solución cerrada: la media geométrica ponderada de las razones
-por-banda. Se calcula la misma razón, de forma independiente, contra el
-catálogo puntual NVSS (`rms_obs/rms_modelo_en_fuentes`, un solo número
-global en vez de un perfil) como validación cruzada: si ambas fuentes de
-datos -una reconstrucción Bayesiana de cielo completo, un catálogo de
-mediciones puntuales crudas, con sistemáticas y errores completamente
-distintos- dan un factor de escala consistente, el ajuste no es un
-artefacto de una particularidad de un solo conjunto de datos.
+    RM(f) = f · RM_regular + RM_turbulenta,
 
-Uso: `python calibrar_amplitud_campo.py` después de correr `run.py` al
-menos una vez (usa el `rm_mapa.npy` guardado, no vuelve a simular).
+con RM_regular calculada con factor 1. Basta un ray tracing por
+componente para evaluar cualquier f sin volver a simular (ver
+`tests/test_calibracion_amplitud.py`). Se eligen dos estimaciones de f
+independientes:
+
+1. Oppermann & Enßlin (2012): el f que minimiza la suma de cuadrados de
+   log(RMS_modelo / RMS_obs) sobre las bandas de |b|, ponderada por el
+   número de píxeles de cada banda.
+2. Catálogo NVSS (Taylor, Stil & Sunstrum 2009): el f con el que la RMS
+   del modelo en la posición de las fuentes iguala a la observada.
+
+Los dos datos tienen sistemáticas distintas (el catálogo suma la RM
+intrínseca de cada fuente y el ruido de medida; la reconstrucción de
+Oppermann suprime potencia en escalas pequeñas), así que se propone su
+media geométrica, y el script imprime las dos para ver cuánto difieren.
+
+Uso: `python calibrar_amplitud_campo.py`. Simula con la configuración
+actual (semilla 0, la misma que `run.py`) e imprime el valor a poner en
+`FACTOR_CAMPO_REGULAR`; no modifica config_fisica.py.
 """
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
+from scipy.optimize import brentq, minimize_scalar
 
+import config as cfg
+from faradaymr import get_backend, los_raytrace, to_numpy
 from faradaymr import observational as obs
-from faradaymr.io import load_map
+from model import construir_escenario
 
-RUTA_RESULTADOS = os.path.join(os.path.dirname(__file__), "results", "foreground_galactico")
+RANGO_FACTOR = (0.05, 5.0)
 
 
-def calcular_alpha_oppermann(l_grid, b_grid, rm_map) -> float:
+def mapas_rm_por_componente(seed: int = 0, use_gpu=None):
     """
-    Media geométrica, ponderada por número de píxeles por banda, de la
-    razón (RMS observado / RMS modelo) en cada banda de |b| -la solución
-    cerrada del ajuste por mínimos cuadrados en log-espacio descrito en el
-    docstring del módulo.
+    (l_grid, b_grid, rm_regular, rm_turbulenta): la RM del campo regular
+    con FACTOR_CAMPO_REGULAR = 1 y la de la turbulencia, integradas por
+    separado sobre la misma grilla de cielo que `run.py`. Con GPU se
+    integra en cupy y se devuelve en numpy (las comparaciones contra datos
+    reales son de CPU).
     """
-    resultado = obs.comparar_con_oppermann(l_grid, b_grid, rm_map)
-    perfil_modelo = resultado["perfil_modelo"]
-    perfil_obs = resultado["perfil_obs"]
+    xp = get_backend(use_gpu)
+    factor_original = cfg.FACTOR_CAMPO_REGULAR
+    cfg.FACTOR_CAMPO_REGULAR = 1.0
+    try:
+        (_, _, _, ne, ne_rel, observer_pos, box_size, dx, regular, turbulento) = (
+            construir_escenario(
+                use_gpu=use_gpu, rng=np.random.RandomState(seed), return_components=True
+            )
+        )
+    finally:
+        cfg.FACTOR_CAMPO_REGULAR = factor_original
 
-    razones = perfil_obs["valores"] / perfil_modelo["valores"]
-    pesos = perfil_modelo["n_pixeles"].astype(float)
-    return float(np.exp(np.sum(pesos * np.log(razones)) / np.sum(pesos)))
+    l_grid = np.linspace(-np.pi, np.pi, cfg.N_L, endpoint=False)
+    b_max = np.radians(cfg.B_MAX_DEG)
+    b_grid = np.linspace(-b_max, b_max, cfg.N_B)
+
+    def rm_de(campo):
+        rm_map, _i, _q, _u = los_raytrace.sky_map(
+            *campo, ne, ne_rel, observer_pos, dx, box_size, xp.asarray(l_grid), xp.asarray(b_grid),
+            dl=cfg.DL_KPC, frequency=cfg.NU_HZ, wavelength=cfg.LAMBDA_ONDA_M,
+            p_index=cfg.P_SPEC, xp=xp, pixel_chunk_size=cfg.PIXEL_CHUNK_SIZE,
+            length_unit_pc=cfg.KPC_A_PC,
+        )
+        return to_numpy(rm_map)
+
+    return l_grid, b_grid, rm_de(regular), rm_de(turbulento)
 
 
-def calcular_alpha_catalogo(l_grid, b_grid, rm_map) -> float:
-    """Razón (RMS observado / RMS modelo en las fuentes) contra el catálogo
-    NVSS -un único número global, ver docstring del módulo."""
-    resultado = obs.comparar_con_catalogo_taylor(l_grid, b_grid, rm_map)
-    return float(resultado["rms_obs"] / resultado["rms_modelo_en_fuentes"])
+def factor_oppermann(l_grid, b_grid, rm_regular, rm_turbulenta) -> float:
+    """f que minimiza el residuo en log del perfil RMS(RM) vs |b| contra Oppermann+2012."""
+    perfil_obs = obs.comparar_con_oppermann(l_grid, b_grid, rm_regular)["perfil_obs"]
+    pesos = perfil_obs["n_pixeles"].astype(float)
+
+    def costo(factor):
+        rm = factor * rm_regular + rm_turbulenta
+        perfil_modelo = obs.perfil_estadistico_vs_latitud(b_grid, rm)
+        residuo = np.log(perfil_modelo["valores"] / perfil_obs["valores"])
+        return float(np.sum(pesos * residuo**2))
+
+    return float(minimize_scalar(costo, bounds=RANGO_FACTOR, method="bounded").x)
 
 
-def calibrar(ruta_resultados: str = RUTA_RESULTADOS) -> dict:
-    l_grid = load_map(ruta_resultados, "l_grid")
-    b_grid = load_map(ruta_resultados, "b_grid")
-    rm_map = load_map(ruta_resultados, "rm_mapa")
+def factor_catalogo(l_grid, b_grid, rm_regular, rm_turbulenta) -> float:
+    """f con el que la RMS del modelo en las fuentes NVSS iguala la observada."""
+    def exceso(factor):
+        resultado = obs.comparar_con_catalogo_taylor(
+            l_grid, b_grid, factor * rm_regular + rm_turbulenta
+        )
+        return resultado["rms_modelo_en_fuentes"] - resultado["rms_obs"]
 
-    alpha_oppermann = calcular_alpha_oppermann(l_grid, b_grid, rm_map)
-    alpha_catalogo = calcular_alpha_catalogo(l_grid, b_grid, rm_map)
-    alpha_combinado = float(np.sqrt(alpha_oppermann * alpha_catalogo))
+    return float(brentq(exceso, *RANGO_FACTOR))
 
-    print(f"alpha (perfil vs |b|, Oppermann+2012):        {alpha_oppermann:.4f}")
-    print(f"alpha (RMS global, catálogo NVSS Taylor+2009): {alpha_catalogo:.4f}")
-    print(f"alpha combinado (media geométrica de ambos):   {alpha_combinado:.4f}")
-    print()
-    print("Valores actuales -> calibrados (config_fisica.py):")
-    print(f"  B0_REGULAR:    2.0 uG -> {2.0 * alpha_combinado:.3f} uG")
-    print(f"  B0_TURBULENTO: 3.0 uG -> {3.0 * alpha_combinado:.3f} uG")
+
+def calibrar(seed: int = 0, use_gpu=None) -> dict:
+    l_grid, b_grid, rm_regular, rm_turbulenta = mapas_rm_por_componente(seed, use_gpu=use_gpu)
+
+    f_oppermann = factor_oppermann(l_grid, b_grid, rm_regular, rm_turbulenta)
+    f_catalogo = factor_catalogo(l_grid, b_grid, rm_regular, rm_turbulenta)
+    f_combinado = float(np.sqrt(f_oppermann * f_catalogo))
+
+    print(f"Turbulencia efectiva (derivada, no ajustada): {cfg.B0_TURBULENTO_MG:.3f} uG "
+          f"(= {cfg.B0_TURBULENTO_LITERATURA_MG:.1f} uG x {cfg.FACTOR_TURBULENCIA:.3f})")
+    print(f"factor regular (perfil vs |b|, Oppermann+2012):  {f_oppermann:.3f}")
+    print(f"factor regular (RMS en fuentes NVSS, Taylor+09): {f_catalogo:.3f}")
+    print(f"factor regular combinado (media geométrica):     {f_combinado:.3f}")
+    print(f"\nFACTOR_CAMPO_REGULAR actual: {cfg.FACTOR_CAMPO_REGULAR:.3f} -> propuesto: {f_combinado:.2f}")
 
     return {
-        "alpha_oppermann": alpha_oppermann,
-        "alpha_catalogo": alpha_catalogo,
-        "alpha_combinado": alpha_combinado,
+        "factor_oppermann": f_oppermann,
+        "factor_catalogo": f_catalogo,
+        "factor_combinado": f_combinado,
     }
 
 

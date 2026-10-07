@@ -194,10 +194,13 @@ def test_restar_planck_recupera_alpha_conocido_en_un_caso_sintetico(tmp_path, mo
     i_map_modelo = obs.project_healpix_to_grid(mapa_base, l_grid, b_grid)
 
     resultado = obs.restar_planck_030ghz(
-        l_grid, b_grid, i_map_modelo, path=str(tmp_path / "planck_sintetico.fits")
+        l_grid, b_grid, i_map_modelo, path=str(tmp_path / "planck_sintetico.fits"), nside=nside
     )
 
-    assert resultado["alpha"] == pytest.approx(alpha_verdadero, rel=1e-6)
+    # La resta trabaja en K_RJ: el archivo sintético está en K_CMB, como Planck.
+    alpha_krj = alpha_verdadero * obs.factor_kcmb_a_krj(obs.NU_PLANCK_030_HZ)
+    assert resultado["alpha"] == pytest.approx(alpha_krj, rel=1e-5)
+    assert resultado["fondo_k_rj"] == pytest.approx(0.0, abs=1e-5)
     np.testing.assert_allclose(resultado["residuo"], 0.0, atol=1e-4)
     assert resultado["fraccion_varianza_explicada"] == pytest.approx(1.0, abs=1e-6)
 
@@ -206,4 +209,63 @@ def test_restar_planck_recupera_alpha_conocido_en_un_caso_sintetico(tmp_path, mo
 def test_load_planck_030ghz_map_tiene_la_resolucion_publicada():
     datos = obs.load_planck_030ghz_map()
     assert datos["nside"] == 1024
-    assert datos["i_k_cmb"].shape == datos["q_k_cmb"].shape == datos["u_k_cmb"].shape
+    assert datos["i_k_rj"].shape == datos["q_k_rj"].shape == datos["u_k_rj"].shape
+    assert datos["convencion_polarizacion_origen"] == "COSMO"
+
+
+def test_factor_kcmb_a_krj_a_28_4_ghz_y_limite_de_baja_frecuencia():
+    # x = h nu / k T_CMB = 0.500 a 28.4 GHz -> x^2 e^x / (e^x - 1)^2 = 0.979
+    assert obs.factor_kcmb_a_krj(28.4e9) == pytest.approx(0.9794, abs=1e-3)
+    # Muy por debajo del pico del CMB las dos temperaturas coinciden.
+    assert obs.factor_kcmb_a_krj(1e6) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_load_planck_pasa_u_de_cosmo_a_iau(tmp_path):
+    import healpy as hp
+    from astropy.io import fits
+
+    npix = hp.nside2npix(2)
+    columnas = [
+        fits.Column(name=nombre, format="E", array=np.full(npix, valor, dtype=np.float32))
+        for nombre, valor in [("I_STOKES", 1.0), ("Q_STOKES", 0.5), ("U_STOKES", 0.25)]
+    ]
+    hdu = fits.BinTableHDU.from_columns(columnas)
+    hdu.header.update(PIXTYPE="HEALPIX", ORDERING="RING", NSIDE=2, POLCCONV="COSMO")
+    ruta = tmp_path / "planck_cosmo.fits"
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(ruta)
+
+    datos = obs.load_planck_030ghz_map(str(ruta))
+    factor = obs.factor_kcmb_a_krj(obs.NU_PLANCK_030_HZ)
+    np.testing.assert_allclose(datos["q_k_rj"], 0.5 * factor, rtol=1e-6)
+    np.testing.assert_allclose(datos["u_k_rj"], -0.25 * factor, rtol=1e-6)
+
+
+def test_ajuste_con_fondo_no_pierde_plantillas_de_amplitud_minuscula():
+    # El I del modelo a 28.4 GHz vale ~1e-15 (u.a.): sin normalizar, lstsq
+    # tomaba esa columna por cero y devolvía pendiente 0.
+    rng = np.random.default_rng(1)
+    x = rng.uniform(1e-15, 3e-15, size=500)
+    y = 2e10 * x + 3.0
+    a, c, r2 = obs._ajuste_lineal_con_fondo(x, y, np.ones_like(x))
+    assert a == pytest.approx(2e10, rel=1e-8)
+    assert c == pytest.approx(3.0, rel=1e-8)
+    assert r2 == pytest.approx(1.0, abs=1e-10)
+
+
+def test_coherencia_angular_respeta_la_simetria_de_180_grados():
+    psi = np.radians(np.array([10.0, 50.0, -70.0]))
+    pesos = np.ones(3)
+    assert obs.coherencia_angular(psi, psi, pesos) == pytest.approx(1.0)
+    assert obs.coherencia_angular(psi, psi + np.pi, pesos) == pytest.approx(1.0)
+    assert obs.coherencia_angular(psi, psi + np.pi / 2, pesos) == pytest.approx(-1.0)
+
+
+def test_rms_rm_alta_latitud_pondera_por_area_y_recorta_en_b():
+    import numpy as np
+    from faradaymr.calibration import rms_rm_alta_latitud
+
+    b = np.radians(np.array([-80.0, -30.0, 0.0, 30.0, 80.0]))
+    rm = np.zeros((4, 5))
+    rm[:, [0, 4]] = 10.0  # solo las bandas |b| >= 60
+    rm[:, [1, 2, 3]] = 1e6  # deben ignorarse
+    assert np.isclose(rms_rm_alta_latitud(rm, b), 10.0)

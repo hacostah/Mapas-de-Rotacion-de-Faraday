@@ -67,3 +67,40 @@ def transverse_rm_dispersion(rm_map, distance_map, bins, xp=None):
     Reutiliza `radial_profile` sin modificarla, fijando `statistic="std"`.
     """
     return radial_profile(rm_map, distance_map, bins, statistic="std", xp=xp)
+
+def isotropic_energy_spectrum(bx, by, bz, dx, xp=None):
+    """
+    Espectro de energía magnética isotrópico E(k) de un campo vectorial 3D
+    periódico, promediado en cascarones esféricos de |k|.
+
+    Normalizado por Parseval: sum(E(k) * dk) = <|B|^2> (restringido a la
+    esfera |k| <= k_Nyquist), de modo que la forma de E(k) se pueda
+    comparar directo contra la ley de potencias que se impuso (Kolmogorov:
+    E(k) ∝ k^{-5/3}; ver `faradaymr.fields.gaussian_random_field`).
+
+    Los cascarones tienen ancho igual al modo fundamental k_f = 2*pi/(N*dx)
+    y llegan hasta k_Nyquist = pi/dx; los modos de las esquinas del cubo
+    (|k| > k_Nyquist) no llenan un cascarón completo y se descartan.
+
+    Devuelve (k_centros, E_k): en unidades de 1/dx y [B]^2 * dx.
+    """
+    import numpy as np
+
+    campos = [to_numpy(c) for c in (bx, by, bz)]
+    n = campos[0].shape[0]
+    k1d = np.fft.fftfreq(n, d=dx) * 2.0 * np.pi
+    kx, ky, kz = np.meshgrid(k1d, k1d, k1d, indexing="ij")
+    k_mag = np.sqrt(kx**2 + ky**2 + kz**2).ravel()
+
+    potencia = sum(np.abs(np.fft.fftn(c)) ** 2 for c in campos).ravel() / n**6
+
+    k_f = 2.0 * np.pi / (n * dx)
+    bordes = (np.arange(0, n // 2 + 1) + 0.5) * k_f
+    bordes[0] = 0.0
+    indice = np.digitize(k_mag, bordes) - 1
+    valido = (indice >= 0) & (indice < len(bordes) - 1)
+
+    suma = np.bincount(indice[valido], weights=potencia[valido], minlength=len(bordes) - 1)
+    ancho = np.diff(bordes)
+    centros = 0.5 * (bordes[:-1] + bordes[1:])
+    return centros[1:], (suma / ancho)[1:]  # se descarta el cascarón k=0

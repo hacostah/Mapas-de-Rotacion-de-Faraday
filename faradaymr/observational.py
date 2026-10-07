@@ -150,31 +150,91 @@ def load_haslam408_map(path: str = RUTA_HASLAM408):
     }
 
 
-def load_planck_030ghz_map(path: str = RUTA_PLANCK_030GHZ):
+NU_PLANCK_030_HZ = 28.4e9  # frecuencia central efectiva (Planck 2018 II, tabla 4)
+NU_HASLAM_HZ = 408e6
+T_CMB_K = 2.7255  # Fixsen (2009)
+
+
+def factor_kcmb_a_krj(nu_hz, t_cmb_k=T_CMB_K):
+    """
+    Factor que pasa una fluctuación de K_CMB (temperatura termodinámica) a
+    K_RJ (temperatura de brillo de Rayleigh-Jeans): x^2 e^x / (e^x - 1)^2,
+    con x = h nu / (k T_CMB). A 28.4 GHz vale ~0.98. Hace falta para
+    comparar Planck con Haslam, que está en K_RJ: el índice espectral del
+    sincrotrón se define sobre temperatura de brillo.
+    """
+    from scipy.constants import h, k
+
+    x = h * nu_hz / (k * t_cmb_k)
+    return x**2 * np.exp(x) / np.expm1(x) ** 2
+
+
+def load_planck_030ghz_map(path: str = RUTA_PLANCK_030GHZ, nside_salida=None):
     """
     Carga el mapa Planck LFI 30 GHz, misión completa (PR3/DX12, "full"):
-    I/Q/U en K_CMB, HEALPix nside=1024 -el canal de frecuencia más baja de
-    Planck, el más dominado por sincrotrón Galáctico de los 9 disponibles
-    (a frecuencias más altas dominan polvo térmico y CMB; ver Planck 2018
-    results IV, "Diffuse component separation"), y por eso el elegido para
-    comparar contra el I/Q/U sintético de este framework.
+    el canal de frecuencia más baja de Planck y el más dominado por
+    sincrotrón Galáctico (ver Planck 2018 results IV).
 
-    El archivo en disco está en orden NESTED (ver header,
-    `ORDERING='NESTED'`); igual que en `load_haslam408_map`,
-    `healpy.read_map` ya lo reordena a RING automáticamente antes de
-    devolverlo (ver la nota en esa función).
+    Lo devuelve listo para comparar contra el modelo:
+
+    - En K_RJ (el archivo está en K_CMB), ver `factor_kcmb_a_krj`.
+    - Con U en convención IAU. El archivo usa la convención COSMO
+      (`POLCCONV='COSMO'` en el header), que mide el ángulo al revés:
+      U_IAU = -U_COSMO. Sin este cambio de signo, los ángulos de
+      polarización de Planck quedan espejados respecto a los del modelo.
+    - Opcionalmente degradado a `nside_salida` (promedio de píxeles). La
+      grilla del modelo tiene píxeles de ~2°, así que comparar a nside=1024
+      (~3.4') solo agrega ruido. Las desviaciones estándar del ruido de
+      Q y U (`sigma_q_k_rj`, `sigma_u_k_rj`, de las columnas QQ_cov/UU_cov)
+      se degradan como varianza de un promedio: var / n_subpíxeles.
+
+    `healpy.read_map` ya reordena el archivo NESTED a RING (ver la nota en
+    `load_haslam408_map`).
     """
     import healpy as hp
+    from astropy.io import fits
+
+    with fits.open(path) as hdul:
+        cabecera = hdul[1].header
+        columnas = hdul[1].columns.names
+    convencion = str(cabecera.get("POLCCONV", "IAU")).strip().upper()
 
     i_k, q_k, u_k = hp.read_map(path, hdu=1, field=(0, 1, 2))
-    return {
-        "i_k_cmb": i_k,
-        "q_k_cmb": q_k,
-        "u_k_cmb": u_k,
+    tiene_ruido = "QQ_cov" in columnas and "UU_cov" in columnas
+    if tiene_ruido:
+        var_q, var_u = hp.read_map(
+            path, hdu=1, field=(columnas.index("QQ_cov"), columnas.index("UU_cov"))
+        )
+
+    nside_origen = hp.get_nside(i_k)
+    if nside_salida is not None and nside_salida != nside_origen:
+        i_k, q_k, u_k = hp.ud_grade([i_k, q_k, u_k], nside_salida)
+        if tiene_ruido:
+            # power=2 divide por (nside_origen/nside_salida)^2 = número de
+            # subpíxeles: la varianza de un promedio de N píxeles
+            # independientes es var/N.
+            var_q, var_u = hp.ud_grade([var_q, var_u], nside_salida, power=2)
+
+    factor = factor_kcmb_a_krj(NU_PLANCK_030_HZ)
+
+    def sin_unseen(mapa):
+        return np.where(mapa == hp.UNSEEN, np.nan, mapa)
+
+    signo_u = -1.0 if convencion == "COSMO" else 1.0
+    datos = {
+        "i_k_rj": sin_unseen(i_k) * factor,
+        "q_k_rj": sin_unseen(q_k) * factor,
+        "u_k_rj": signo_u * sin_unseen(u_k) * factor,
         "nside": hp.get_nside(i_k),
+        "nside_origen": nside_origen,
         "nest": False,
+        "convencion_polarizacion_origen": convencion,
         "referencia": "Planck Collaboration, mapa LFI 30GHz de misión completa (PR3/DX12)",
     }
+    if tiene_ruido:
+        datos["sigma_q_k_rj"] = np.sqrt(sin_unseen(var_q)) * factor
+        datos["sigma_u_k_rj"] = np.sqrt(sin_unseen(var_u)) * factor
+    return datos
 
 
 def _parse_sexagesimal_dec(token: str) -> float:
@@ -384,13 +444,21 @@ def perfil_estadistico_vs_latitud(b_grid, mapa_lb, bins_deg=None, estadistico="r
     incluyendo el signo) o "mean_abs" (<|RM|>, más robusto a valores
     atípicos aislados).
 
-    Devuelve dict con `centros_deg` (centro de cada bin) y `valores`
-    (mismo largo), ignorando bins sin píxeles.
+    Los promedios se pesan por cos(b) (igual área en el cielo, ver nota en
+    el cuerpo). Devuelve dict con `centros_deg` (centro de cada bin) y
+    `valores` (mismo largo), ignorando bins sin píxeles.
     """
     mapa_lb = np.asarray(mapa_lb)
-    b_deg_abs = np.abs(np.degrees(np.asarray(b_grid, dtype=float)))
+    b_rad = np.asarray(b_grid, dtype=float)
+    b_deg_abs = np.abs(np.degrees(b_rad))
     if bins_deg is None:
         bins_deg = np.linspace(0.0, float(np.max(b_deg_abs)), 18)
+
+    # La grilla (l, b) es rectangular, no de igual área: un píxel a latitud
+    # b cubre un ángulo sólido proporcional a cos(b). Sin este peso, los
+    # polos (donde la grilla se apila) pesarían más que el plano en
+    # cualquier promedio, y el RMS/media de una banda quedaría sesgado.
+    peso_fila = np.cos(b_rad)
 
     centros, valores, n_pixeles = [], [], []
     for lo, hi in zip(bins_deg[:-1], bins_deg[1:]):
@@ -398,13 +466,15 @@ def perfil_estadistico_vs_latitud(b_grid, mapa_lb, bins_deg=None, estadistico="r
         if not np.any(mascara):
             continue
         datos = mapa_lb[:, mascara]
-        datos = datos[np.isfinite(datos)]
+        pesos = np.broadcast_to(peso_fila[mascara], datos.shape)
+        bueno = np.isfinite(datos)
+        datos, pesos = datos[bueno], pesos[bueno]
         if datos.size == 0:
             continue
         if estadistico == "rms":
-            valor = float(np.sqrt(np.mean(datos**2)))
+            valor = float(np.sqrt(np.average(datos**2, weights=pesos)))
         elif estadistico == "mean_abs":
-            valor = float(np.mean(np.abs(datos)))
+            valor = float(np.average(np.abs(datos), weights=pesos))
         else:
             raise ValueError(f"estadistico desconocido: {estadistico!r}")
         centros.append(0.5 * (lo + hi))
@@ -416,6 +486,37 @@ def perfil_estadistico_vs_latitud(b_grid, mapa_lb, bins_deg=None, estadistico="r
         "valores": np.array(valores),
         "n_pixeles": np.array(n_pixeles),
     }
+
+
+def perfil_rms_catalogo_vs_latitud(resultado_catalogo, bins_deg):
+    """
+    RMS(RM) del catálogo NVSS (Taylor+2009) en bandas de |b|, con el ruido
+    de medida restado en cuadratura: sqrt(<RM²> - <σ²>). Sigue incluyendo
+    la RM intrínseca de cada fuente (~6-10 rad/m², Schnitzeler 2010), así
+    que es una cota superior de la RM galáctica; la reconstrucción de
+    Oppermann+2012, que suaviza escalas pequeñas, es la cota inferior.
+    `resultado_catalogo`: lo que devuelve `comparar_con_catalogo_taylor`.
+    """
+    b_abs = np.abs(np.asarray(resultado_catalogo["b_deg"], dtype=float))
+    rm = np.asarray(resultado_catalogo["rm_obs"], dtype=float)
+    ruido = np.asarray(resultado_catalogo["e_rm_obs"], dtype=float)
+    centros, valores, n_fuentes = [], [], []
+    for lo, hi in zip(bins_deg[:-1], bins_deg[1:]):
+        en_banda = (b_abs >= lo) & (b_abs < hi)
+        if np.sum(en_banda) < 10:
+            continue
+        centros.append(0.5 * (lo + hi))
+        valores.append(np.sqrt(max(np.mean(rm[en_banda] ** 2) - np.mean(ruido[en_banda] ** 2), 0.0)))
+        n_fuentes.append(int(np.sum(en_banda)))
+    return {"centros_deg": np.array(centros), "valores": np.array(valores), "n_fuentes": np.array(n_fuentes)}
+
+
+def rms_ponderado_por_area(b_grid, mapa_lb):
+    """RMS global de un mapa (n_l, n_b) con peso cos(b) por píxel."""
+    mapa_lb = np.asarray(mapa_lb, dtype=float)
+    pesos = np.broadcast_to(np.cos(np.asarray(b_grid, dtype=float)), mapa_lb.shape)
+    ok = np.isfinite(mapa_lb)
+    return float(np.sqrt(np.average(mapa_lb[ok] ** 2, weights=pesos[ok])))
 
 
 def comparar_con_oppermann(l_grid, b_grid, rm_sim, path=RUTA_OPPERMANN2012):
@@ -459,8 +560,8 @@ def comparar_con_oppermann(l_grid, b_grid, rm_sim, path=RUTA_OPPERMANN2012):
         "residual": residual,
         "perfil_modelo": perfil_estadistico_vs_latitud(b_grid, rm_sim),
         "perfil_obs": perfil_estadistico_vs_latitud(b_grid, rm_obs_grid),
-        "rms_modelo": float(np.sqrt(np.nanmean(rm_sim**2))),
-        "rms_obs": float(np.sqrt(np.nanmean(rm_obs_grid**2))),
+        "rms_modelo": rms_ponderado_por_area(b_grid, rm_sim),
+        "rms_obs": rms_ponderado_por_area(b_grid, rm_obs_grid),
         "chi2_reducido_ingenuo": float(np.nanmean(chi**2)),
         "referencia": "Oppermann & Enßlin (2012), A&A 542, A93",
     }
@@ -600,74 +701,575 @@ def comparar_morfologia_sincrotron(l_grid, b_grid, i_map, path=RUTA_HASLAM408):
     }
 
 
-def restar_planck_030ghz(l_grid, b_grid, i_map, path=RUTA_PLANCK_030GHZ):
+# --------------------------------------------------------------------------
+# Planck LFI 30 GHz: resta del foreground y validación del modelo
+# --------------------------------------------------------------------------
+
+# nside=32 da píxeles de ~1.8°, del orden de la grilla (l, b) del modelo
+# (~2° en el perfil "rapido"): degradar a esto antes de interpolar baja el
+# ruido de Planck por píxel de ~40 µK a ~1 µK sin perder resolución útil.
+NSIDE_VALIDACION_PLANCK = 32
+
+# Criterios de la validación, fijados antes de mirar el resultado (ver
+# `validar_contra_planck_030ghz`). Cambiarlos para que el modelo pase
+# invalidaría la prueba.
+COHERENCIA_ANGULAR_MINIMA = 0.5
+SENAL_RUIDO_MINIMA_POLARIZACION = 5.0
+
+# Máscaras de estructuras que ningún modelo de campo galáctico de gran
+# escala reproduce (Planck Int. XLII 2016, sec. 3.4 y 3.4.3), con las
+# definiciones de la literatura:
+# - Loops y arcos visibles en polarización: centro (l, b) y radio en
+#   grados, columnas "Polarisation" de la tabla 1 de Vidal et al. (2015,
+#   MNRAS 452, 656). Se enmascara una banda de ±5° alrededor de cada
+#   cresta (FWHM de las crestas ~5°, Planck 2015 XXV sec. 5.4).
+LOOPS_POLARIZACION_VIDAL2015 = {
+    "I (North Polar Spur)": (332.6, 20.7, 54.3),
+    "III": (118.8, 13.2, 31.6),
+    "IV": (315.8, 48.1, 19.3),
+    "GCS": (344.0, 4.8, 18.5),
+    "IIIS": (106.0, -22.0, 50.0),
+    "VIIb": (0.7, -23.3, 45.9),
+    "IX": (332.0, 16.0, 46.5),
+    "X": (30.0, 35.0, 67.0),
+    "XI": (227.0, 38.0, 81.0),
+    "XII": (300.0, 0.7, 27.6),
+}
+SEMIANCHO_MASCARA_LOOPS_DEG = 5.0
+# - Centro galáctico: |l| < 10° y |b| < 10°, como en los perfiles de
+#   Planck Int. XLII (pie de la Fig. 10).
+SEMIANCHO_MASCARA_CENTRO_DEG = 10.0
+# - Región del Fan, estructura local muy polarizada: 100° < l < 170°
+#   (Planck 2015 XXV sec. 5.4). Planck Int. XLII la excluye del perfil del
+#   tercer cuadrante y muestra que deja residuos fuertes en todos los modelos.
+REGION_FAN_L_DEG = (100.0, 170.0)
+
+# Regiones de los perfiles en latitud (Planck Int. XLII, Fig. 4): Galaxia
+# interior y tercer cuadrante, con l en (-180°, 180°].
+REGIONES_PERFIL_LATITUD = {
+    "galaxia_interior": (-90.0, 90.0),
+    "tercer_cuadrante": (-180.0, -90.0),
+}
+ANCHO_BANDA_PERFIL_DEG = 5.0
+
+
+def _pesos_area(b_grid, forma):
+    return np.broadcast_to(np.cos(np.asarray(b_grid, dtype=float)), forma)
+
+
+def _ajuste_lineal_con_fondo(x, y, w):
     """
-    Resta RE-ESCALADA del foreground sincrotrón sintético contra Planck
-    30 GHz (LFI, misión completa) -la pieza final que pide el issue #37
-    ("generar una réplica... para sustraerla de datos de misiones como
-    Planck"), con una salvedad que hay que declarar explícitamente: `i_map`
-    (de `los_raytrace.sky_map`) está en unidades arbitrarias (ver docstring
-    de `comparar_morfologia_sincrotron` para por qué: no hay, en este
-    framework, una población de electrones relativistas calibrada contra
-    un valor físico real), mientras que Planck está en K_CMB. Restar esos
-    dos números directamente, sin reescalar, no tendría sentido físico
-    -sería restar unidades incompatibles, no "eliminar la contaminación".
+    Mínimos cuadrados pesados de y ≈ a·x + c. El término constante c hace
+    falta porque ningún mapa real tiene el cero del modelo: Haslam tiene
+    un nivel cero y un fondo extragaláctico casi isótropo, y Planck el
+    residuo de monopolo/dipolo del CMB. Sin c, ese fondo se absorbe en la
+    pendiente y la sesga.
 
-    Por eso esta función AJUSTA la amplitud del modelo antes de restar:
-    encuentra, por mínimos cuadrados, el factor de escala `alpha` que
-    minimiza sum((I_planck - alpha*I_modelo)^2) sobre toda la grilla
-    -una regresión lineal sin término independiente, con solución cerrada
-    `alpha = sum(I_planck * I_modelo) / sum(I_modelo^2)`- y resta
-    `alpha * I_modelo` con `subtract_foreground`.
-
-    Esto es, deliberadamente, una resta "recalibrada en amplitud", NO una
-    resta independiente: no valida si la amplitud ABSOLUTA del modelo es
-    correcta (esa validación, con unidades físicas reales, ya la hacen
-    `comparar_con_oppermann`/`comparar_con_catalogo_taylor` sobre RM).
-    Lo que SÍ valida es si, una vez fijada la amplitud, la FORMA espacial
-    sintética explica una fracción razonable de la varianza espacial real
-    de Planck a 30 GHz -si el modelo geométrico (disco+brazos+campo
-    espiral) está bien orientado, el residuo debería quedar dominado por
-    CMB+ruido+polvo, sin la estructura de disco/brazos que un mal ajuste
-    de forma dejaría visible.
-
-    Devuelve dict con `i_planck_grid` (K_CMB, regrillado a `l_grid`/
-    `b_grid`), `alpha` (factor de reescalado ajustado), `i_modelo_escalado`,
-    `residuo` (=`subtract_foreground(i_planck_grid, i_modelo_escalado)`),
-    `rms_residuo`/`rms_planck` (K_CMB), y `fraccion_varianza_explicada`
-    (1 - var(residuo)/var(planck): 1.0 sería un ajuste de forma perfecto,
-    0.0 ningún poder explicativo -el número central de este chequeo).
+    Devuelve (a, c, r2), con r2 = 1 - var(residuo)/var(y), ambas
+    varianzas pesadas por w.
     """
-    import healpy as hp
+    # Se normaliza x antes de resolver: `i_map` a 28.4 GHz vale ~1e-15 en
+    # unidades arbitrarias, y junto a una columna de unos `lstsq` descarta
+    # ese valor singular por "numéricamente cero" (daba a=0 y r2=0).
+    escala = float(np.max(np.abs(x))) or 1.0
+    raiz_w = np.sqrt(w)
+    diseno = np.column_stack([x / escala, np.ones_like(x)]) * raiz_w[:, None]
+    (a_normalizado, c), *_ = np.linalg.lstsq(diseno, y * raiz_w, rcond=None)
+    a = a_normalizado / escala
 
-    i_k, _q_k, _u_k = hp.read_map(path, hdu=1, field=(0, 1, 2))
-    i_planck_grid = project_healpix_to_grid(i_k, l_grid, b_grid, nest=False)
+    def var(v):
+        return np.average((v - np.average(v, weights=w)) ** 2, weights=w)
+
+    r2 = 1.0 - var(y - (a * x + c)) / var(y)
+    return float(a), float(c), float(r2)
+
+
+def restar_planck_030ghz(
+    l_grid, b_grid, i_map, path=RUTA_PLANCK_030GHZ, nside=NSIDE_VALIDACION_PLANCK
+):
+    """
+    Resta del foreground sincrotrón sintético de Planck 30 GHz (el
+    entregable del issue #37). `i_map` está en unidades arbitrarias y
+    Planck en K, así que antes de restar se ajusta
+    I_planck ≈ alpha·I_modelo + fondo (ver `_ajuste_lineal_con_fondo`) y
+    se resta solo alpha·I_modelo: el fondo es parte del cielo (CMB, nivel
+    cero), no del foreground.
+
+    Esta resta por sí sola NO valida el modelo: con alpha libre, cualquier
+    plantilla con un disco explica buena parte de la varianza de Planck.
+    La validación está en `validar_contra_planck_030ghz`.
+
+    Devuelve `i_planck_grid` y `residuo` en K_RJ, `alpha`, `fondo_k_rj` y
+    `fraccion_varianza_explicada`.
+    """
+    planck = load_planck_030ghz_map(path, nside_salida=nside)
+    i_planck_grid = project_healpix_to_grid(planck["i_k_rj"], l_grid, b_grid)
 
     i_map = np.asarray(i_map, dtype=float)
     valido = np.isfinite(i_planck_grid) & np.isfinite(i_map)
+    w = _pesos_area(b_grid, i_map.shape)[valido]
+    alpha, fondo, r2 = _ajuste_lineal_con_fondo(i_map[valido], i_planck_grid[valido], w)
 
-    alpha = float(
-        np.sum(i_planck_grid[valido] * i_map[valido]) / np.sum(i_map[valido] ** 2)
-    )
-    i_modelo_escalado = alpha * i_map
-    residuo = subtract_foreground(i_planck_grid, i_modelo_escalado)
-
-    varianza_planck = float(np.var(i_planck_grid[valido]))
-    varianza_residuo = float(np.var(residuo[valido]))
-    fraccion_varianza_explicada = (
-        1.0 - varianza_residuo / varianza_planck if varianza_planck > 0 else float("nan")
-    )
-
+    residuo = subtract_foreground(i_planck_grid, alpha * i_map)
     return {
         "i_planck_grid": i_planck_grid,
         "alpha": alpha,
-        "i_modelo_escalado": i_modelo_escalado,
+        "fondo_k_rj": fondo,
+        "i_modelo_escalado": alpha * i_map,
         "residuo": residuo,
-        "rms_residuo": float(np.sqrt(np.mean(residuo[valido] ** 2))),
-        "rms_planck": float(np.sqrt(np.mean(i_planck_grid[valido] ** 2))),
-        "fraccion_varianza_explicada": fraccion_varianza_explicada,
-        "referencia": (
-            "Planck Collaboration, mapa LFI 30GHz de misión completa "
-            "(PR3/DX12), I_STOKES en K_CMB"
+        "rms_residuo": float(
+            np.sqrt(np.average((residuo[valido] - fondo) ** 2, weights=w))
+        ),
+        "fraccion_varianza_explicada": r2,
+        "referencia": planck["referencia"],
+    }
+
+
+def angulo_polarizacion(q, u):
+    """Ángulo de polarización (IAU, desde el norte galáctico hacia el este) en rad."""
+    return 0.5 * np.arctan2(u, q)
+
+
+def coherencia_angular(psi_a, psi_b, pesos):
+    """
+    <cos 2(psi_a - psi_b)> pesado: 1 si los ángulos coinciden, 0 si no
+    tienen relación, -1 si son perpendiculares. El factor 2 es porque la
+    polarización lineal es simétrica ante psi -> psi + 180°.
+    """
+    return float(np.average(np.cos(2.0 * (psi_a - psi_b)), weights=pesos))
+
+
+def mascara_estructuras_locales(l_grid, b_grid):
+    """
+    True donde el cielo queda FUERA de la comparación: crestas de los loops
+    de Vidal et al. (2015), centro galáctico y región del Fan (ver las
+    constantes de arriba). Forma (len(l_grid), len(b_grid)).
+    """
+    l_rad = np.asarray(l_grid, dtype=float)[:, None]
+    b_rad = np.asarray(b_grid, dtype=float)[None, :]
+    l_deg = np.degrees(l_rad) * np.ones_like(b_rad)
+    b_deg = np.degrees(b_rad) * np.ones_like(l_rad)
+
+    mascara = (np.abs(l_deg) < SEMIANCHO_MASCARA_CENTRO_DEG) & (
+        np.abs(b_deg) < SEMIANCHO_MASCARA_CENTRO_DEG
+    )
+    l_360 = np.mod(l_deg, 360.0)
+    mascara |= (l_360 > REGION_FAN_L_DEG[0]) & (l_360 < REGION_FAN_L_DEG[1])
+
+    for l_c, b_c, radio in LOOPS_POLARIZACION_VIDAL2015.values():
+        l_c, b_c = np.radians(l_c), np.radians(b_c)
+        cos_sep = np.sin(b_rad) * np.sin(b_c) + np.cos(b_rad) * np.cos(b_c) * np.cos(l_rad - l_c)
+        separacion = np.degrees(np.arccos(np.clip(cos_sep, -1.0, 1.0)))
+        mascara |= np.abs(separacion - radio) < SEMIANCHO_MASCARA_LOOPS_DEG
+    return mascara
+
+
+def _perfil_latitud_con_signo(b_grid, mapa, valido, l_en_region, pesos):
+    """Media pesada por cos b en bandas de b con signo, solo en píxeles válidos de la región."""
+    b_deg = np.degrees(np.asarray(b_grid, dtype=float))
+    bordes = np.arange(-85.0, 85.0 + 1e-9, ANCHO_BANDA_PERFIL_DEG)
+    centros, valores = [], []
+    for lo, hi in zip(bordes[:-1], bordes[1:]):
+        filas = (b_deg >= lo) & (b_deg < hi)
+        seleccion = valido & l_en_region[:, None] & filas[None, :]
+        if not np.any(seleccion):
+            continue
+        centros.append(0.5 * (lo + hi))
+        valores.append(np.average(mapa[seleccion], weights=pesos[seleccion]))
+    return np.array(centros), np.array(valores)
+
+
+def validar_contra_planck_030ghz(
+    l_grid,
+    b_grid,
+    q_ensamble,
+    u_ensamble,
+    path_planck=RUTA_PLANCK_030GHZ,
+    nside=NSIDE_VALIDACION_PLANCK,
+):
+    """
+    Valida el campo magnético del modelo contra la polarización de Planck
+    LFI 30 GHz siguiendo el procedimiento de Planck Collaboration Int. XLII
+    (2016, A&A 596, A103), la comparación de referencia de modelos de campo
+    galáctico (Sun10, JF12, Jaffe13) contra Planck:
+
+    - Solo polarización. La intensidad total a 30 GHz está contaminada por
+      emisión anómala de polvo y free-free (XLII sec. 3.4.1; Planck 2015
+      XXV), y la solución Commander de sincrotrón es Haslam 408 MHz con un
+      espectro fijo, así que un índice espectral medido con I sería
+      contaminación o circularidad. A 30 GHz, P casi solo tiene sincrotrón
+      y la rotación de Faraday es despreciable.
+    - Varianza galáctica (XLII sec. 3.4.1): el cielo es una realización de
+      la turbulencia. `q_ensamble`/`u_ensamble` (forma (N, n_l, n_b), a
+      28.4 GHz) son N realizaciones del modelo; cada estadístico se da como
+      media ± desviación estándar sobre ellas.
+    - Máscaras (XLII sec. 3.4.3): crestas de loops y spurs (Vidal et al.
+      2015), centro galáctico y región del Fan, que ningún modelo de gran
+      escala incluye (ver `mascara_estructuras_locales`).
+
+    Pruebas, con criterios fijados antes de ver el resultado:
+
+    1. Ángulo de polarización: <cos 2Δψ> (pesado por P de Planck y cos b,
+       en píxeles no enmascarados con P/σ_P >= 5) >= 0.5 y mayor que la
+       plantilla trivial ψ = 0 (campo paralelo al plano).
+    2. Forma de P: R² de P_planck ≈ a·P_modelo + c mayor que el de un disco
+       plano-paralelo (P ∝ 1/sin|b|), en el cielo no enmascarado.
+    3. Perfiles de P en latitud (XLII Fig. 4) en la Galaxia interior y el
+       tercer cuadrante, con una sola normalización libre (degenerada con la
+       de los electrones relativistas, como en XLII). Es informativa: se
+       reportan los residuos en unidades de σ² = σ_varianza_galáctica² +
+       σ_ruido², sin umbral, porque XLII encuentra residuos mayores que la
+       varianza del modelo incluso para los modelos de la literatura.
+
+    `valida` es True si pasan 1 y 2 con la media del ensamble.
+    """
+    planck = load_planck_030ghz_map(path_planck, nside_salida=nside)
+
+    def a_grilla(mapa_healpix):
+        return project_healpix_to_grid(mapa_healpix, l_grid, b_grid)
+
+    q_planck = a_grilla(planck["q_k_rj"])
+    u_planck = a_grilla(planck["u_k_rj"])
+    sigma_p = np.sqrt(
+        0.5 * (a_grilla(planck["sigma_q_k_rj"]) ** 2 + a_grilla(planck["sigma_u_k_rj"]) ** 2)
+    )
+    # Sesgo de ruido de P = sqrt(Q²+U²): se resta en cuadratura (Wardle &
+    # Kronberg 1974).
+    p_planck = np.sqrt(np.clip(q_planck**2 + u_planck**2 - sigma_p**2, 0.0, None))
+    psi_planck = angulo_polarizacion(q_planck, u_planck)
+
+    q_ensamble = np.asarray(q_ensamble, dtype=float)
+    u_ensamble = np.asarray(u_ensamble, dtype=float)
+    p_ensamble = np.hypot(q_ensamble, u_ensamble)
+    forma = p_planck.shape
+    pesos = np.array(_pesos_area(b_grid, forma))
+    abs_b = np.abs(np.broadcast_to(np.asarray(b_grid, dtype=float), forma))
+    enmascarado = mascara_estructuras_locales(l_grid, b_grid)
+    usable = np.isfinite(p_planck) & ~enmascarado
+
+    def media_y_dispersion(valores):
+        valores = np.asarray(valores, dtype=float)
+        return float(np.mean(valores)), float(np.std(valores, ddof=1)) if len(valores) > 1 else 0.0
+
+    # --- 1. Ángulo de polarización ------------------------------------------
+    detectado = usable & (p_planck >= SENAL_RUIDO_MINIMA_POLARIZACION * sigma_p)
+    w_pol = (pesos * p_planck)[detectado]
+    coherencias = [
+        coherencia_angular(angulo_polarizacion(q, u)[detectado], psi_planck[detectado], w_pol)
+        for q, u in zip(q_ensamble, u_ensamble)
+    ]
+    coherencia_media, coherencia_dispersion = media_y_dispersion(coherencias)
+    coherencia_trivial = coherencia_angular(0.0, psi_planck[detectado], w_pol)
+    prueba_angulo = {
+        "coherencia_modelo_media": coherencia_media,
+        "coherencia_modelo_dispersion_entre_realizaciones": coherencia_dispersion,
+        "coherencia_plantilla_campo_paralelo_al_plano": coherencia_trivial,
+        "fraccion_cielo_usada": float(np.sum(pesos[detectado]) / np.sum(pesos)),
+        "criterio": (
+            f"<cos 2Δψ> >= {COHERENCIA_ANGULAR_MINIMA} y mayor que la plantilla ψ=0, "
+            f"en píxeles no enmascarados con P/σ >= {SENAL_RUIDO_MINIMA_POLARIZACION:.0f}"
+        ),
+        "pasa": bool(
+            coherencia_media >= COHERENCIA_ANGULAR_MINIMA and coherencia_media > coherencia_trivial
         ),
     }
+
+    # --- 2. Forma de la intensidad polarizada -------------------------------
+    paso_b = float(np.min(np.abs(np.diff(np.asarray(b_grid, dtype=float)))))
+    # El disco plano-paralelo diverge en b=0: se corta en el tamaño del píxel.
+    p_disco = 1.0 / np.sin(np.maximum(abs_b, paso_b))
+    r2_modelo = [
+        _ajuste_lineal_con_fondo(p[usable], p_planck[usable], pesos[usable])[2] for p in p_ensamble
+    ]
+    r2_media, r2_dispersion = media_y_dispersion(r2_modelo)
+    _, _, r2_disco = _ajuste_lineal_con_fondo(p_disco[usable], p_planck[usable], pesos[usable])
+    prueba_forma_p = {
+        "r2_modelo_media": r2_media,
+        "r2_modelo_dispersion_entre_realizaciones": r2_dispersion,
+        "r2_disco_plano_paralelo": r2_disco,
+        "criterio": "R² del modelo > R² de un disco plano-paralelo (P ∝ 1/sin|b|), cielo no enmascarado",
+        "pasa": bool(r2_media > r2_disco),
+    }
+
+    # --- 3. Perfiles de P en latitud (informativa) --------------------------
+    l_deg = np.degrees(np.asarray(l_grid, dtype=float))
+    perfiles = {}
+    for nombre, (l_min, l_max) in REGIONES_PERFIL_LATITUD.items():
+        en_region = (l_deg > l_min) & (l_deg <= l_max)
+        centros, perfil_datos = _perfil_latitud_con_signo(b_grid, p_planck, usable, en_region, pesos)
+        perfiles_modelo = np.array([
+            _perfil_latitud_con_signo(b_grid, p, usable, en_region, pesos)[1] for p in p_ensamble
+        ])
+        # Ruido de la media pesada de cada banda: sqrt(Σ w² σ²) / Σ w.
+        ruido = np.array([
+            np.sqrt(np.sum((pesos * sigma_p)[s] ** 2)) / np.sum(pesos[s])
+            for s in (
+                usable & en_region[:, None]
+                & ((np.degrees(np.asarray(b_grid))[None, :] >= c - ANCHO_BANDA_PERFIL_DEG / 2)
+                   & (np.degrees(np.asarray(b_grid))[None, :] < c + ANCHO_BANDA_PERFIL_DEG / 2))
+                for c in centros
+            )
+        ])
+        perfiles[nombre] = {
+            "b_deg": centros,
+            "datos": perfil_datos,
+            "modelo_realizaciones": perfiles_modelo,
+            "ruido": ruido,
+        }
+
+    # Una normalización común para las dos regiones, por mínimos cuadrados
+    # pesados por 1/σ², con σ de varianza galáctica y ruido.
+    def componentes(perfil):
+        media = perfil["modelo_realizaciones"].mean(axis=0)
+        varianza_galactica = perfil["modelo_realizaciones"].std(axis=0, ddof=1)
+        return media, varianza_galactica
+
+    num = den = 0.0
+    for perfil in perfiles.values():
+        media, gv = componentes(perfil)
+        # Primera pasada: σ con la varianza galáctica sin escalar da un
+        # peso relativo razonable; la normalización se ajusta con él.
+        peso = 1.0 / (perfil["ruido"] ** 2 + (gv * np.mean(perfil["datos"]) / np.mean(media)) ** 2)
+        num += np.sum(peso * perfil["datos"] * media)
+        den += np.sum(peso * media**2)
+    normalizacion = num / den
+
+    prueba_perfiles = {"normalizacion_k_rj_por_unidad_modelo": float(normalizacion)}
+    for nombre, perfil in perfiles.items():
+        media, gv = componentes(perfil)
+        sigma_total = np.sqrt(perfil["ruido"] ** 2 + (normalizacion * gv) ** 2)
+        residuo = (perfil["datos"] - normalizacion * media) / sigma_total
+        perfil.update(
+            modelo_media=normalizacion * media,
+            sigma_total=sigma_total,
+            residuo_en_sigmas=residuo,
+        )
+        prueba_perfiles[nombre] = {
+            "chi2_reducido": float(np.mean(residuo**2)),
+            "fraccion_bandas_dentro_de_3_sigma": float(np.mean(np.abs(residuo) <= 3.0)),
+            "razon_datos_sobre_modelo_mediana": float(np.median(perfil["datos"] / (normalizacion * media))),
+        }
+    prueba_perfiles["criterio"] = (
+        "informativa (Planck Int. XLII Fig. 4): residuos en σ = varianza galáctica ⊕ ruido"
+    )
+
+    p_modelo = p_ensamble[0]
+    a_p, c_p, _ = _ajuste_lineal_con_fondo(p_modelo[usable], p_planck[usable], pesos[usable])
+    psi_modelo = angulo_polarizacion(q_ensamble[0], u_ensamble[0])
+    return {
+        "angulo_polarizacion": prueba_angulo,
+        "forma_intensidad_polarizada": prueba_forma_p,
+        "perfiles_latitud_p": prueba_perfiles,
+        "n_realizaciones": int(len(q_ensamble)),
+        "valida": prueba_angulo["pasa"] and prueba_forma_p["pasa"],
+        "mapas": {
+            "p_planck_k_rj": p_planck,
+            "p_modelo_escalado_k_rj": a_p * p_modelo + c_p,
+            "delta_psi": np.where(
+                detectado, 0.5 * np.angle(np.exp(2j * (psi_modelo - psi_planck))), np.nan
+            ),
+            "mascara": enmascarado,
+        },
+        "perfiles": perfiles,
+        "referencia": (
+            f"{planck['referencia']}; procedimiento de Planck Collaboration Int. XLII (2016); "
+            "máscaras de Vidal et al. (2015) y Planck 2015 XXV"
+        ),
+    }
+
+
+# Regiones para medir la remoción del foreground polarizado (en l de 0 a
+# 360 y |b|). El plano interior concentra ~80 % de la potencia polarizada
+# de Planck a 30 GHz y es donde la geometría real (tangencias de brazos,
+# inversiones, campo en X) se aleja más de un modelo de juguete, así que se
+# reporta por separado en vez de dejar que domine un número global. La
+# franja |b| < 3° va aparte: ahí Q y U de Planck siguen a la intensidad
+# total (r = -0.76 y -0.89 en |l| < 60°, |b| < 2°, con Q/I ~ U/I ~ -1.5 %)
+# aunque a 30 GHz esa intensidad es sobre todo free-free y emisión anómala
+# de polvo, que no polarizan: es la firma de la fuga de intensidad a
+# polarización por desajuste de banda de LFI (Planck 2018 II), no de
+# sincrotrón.
+REGIONES_REMOCION = {
+    "franja_interior": {"l_deg": ((0.0, 90.0), (270.0, 360.0)), "b_abs_deg": (0.0, 3.0)},
+    "plano_interior": {"l_deg": ((0.0, 90.0), (270.0, 360.0)), "b_abs_deg": (3.0, 20.0)},
+    "plano_exterior": {"l_deg": ((90.0, 270.0),), "b_abs_deg": (0.0, 20.0)},
+    "alta_latitud": {"l_deg": ((0.0, 360.0),), "b_abs_deg": (20.0, 90.0)},
+}
+
+
+def _seleccion_region(l_grid, b_grid, region):
+    l_deg = np.mod(np.degrees(np.asarray(l_grid, dtype=float)), 360.0)[:, None]
+    b_abs = np.abs(np.degrees(np.asarray(b_grid, dtype=float)))[None, :]
+    en_l = np.zeros_like(l_deg, dtype=bool)
+    for lo, hi in region["l_deg"]:
+        en_l |= (l_deg >= lo) & (l_deg < hi)
+    lo_b, hi_b = region["b_abs_deg"]
+    return en_l & (b_abs >= lo_b) & (b_abs < hi_b)
+
+
+def remover_foreground_polarizado_planck(
+    l_grid,
+    b_grid,
+    q_ensamble,
+    u_ensamble,
+    path_planck=RUTA_PLANCK_030GHZ,
+    nside=NSIDE_VALIDACION_PLANCK,
+):
+    """
+    Sustrae el foreground sincrotrón polarizado sintético de Planck LFI
+    30 GHz por ajuste de plantilla (template fitting, la técnica más simple
+    de separación de componentes que usa Planck; Planck 2015 X): en cada
+    región se ajusta una amplitud libre `a` por mínimos cuadrados sobre Q y
+    U a la vez,
+
+        a = Σ w (Q_p Q_m + U_p U_m) / Σ w (Q_m² + U_m²),
+
+    y se resta a·(Q_m, U_m). La amplitud es libre porque la emisividad del
+    modelo no está en unidades físicas; lo que se pone a prueba es la
+    geometría (dónde y con qué ángulo polariza la Galaxia), no la
+    normalización.
+
+    Plantilla: la media de las realizaciones de turbulencia a 28.4 GHz
+    (`q_ensamble`, `u_ensamble`, forma (N, n_l, n_b)), que es la
+    predicción del modelo para el cielo -el cielo real es una realización
+    desconocida de la turbulencia. Se reporta también la dispersión al usar
+    cada realización por separado.
+
+    Métrica: fracción de la potencia polarizada removida, con el ruido de
+    Planck restado (pesos cos b, sin las estructuras locales de
+    `mascara_estructuras_locales`):
+
+        f = 1 - Σ w (|P_residuo|² - σ²) / Σ w (|P_Planck|² - σ²)
+
+    f = 1 es remoción perfecta, f = 0 no remueve nada (también si la
+    plantilla está anticorrelacionada: la amplitud se restringe a a >= 0),
+    f < 0 agrega potencia. Se compara contra una plantilla trivial (campo paralelo al
+    plano con P ∝ 1/sin|b|) y contra una amplitud única para todo el cielo
+    (que mide si el modelo reparte bien la emisión entre regiones).
+    """
+    planck = load_planck_030ghz_map(path_planck, nside_salida=nside)
+
+    def a_grilla(mapa_healpix):
+        return project_healpix_to_grid(mapa_healpix, l_grid, b_grid)
+
+    q_p, u_p = a_grilla(planck["q_k_rj"]), a_grilla(planck["u_k_rj"])
+    varianza_ruido = a_grilla(planck["sigma_q_k_rj"]) ** 2 + a_grilla(planck["sigma_u_k_rj"]) ** 2
+
+    q_ensamble = np.asarray(q_ensamble, dtype=float)
+    u_ensamble = np.asarray(u_ensamble, dtype=float)
+    q_m, u_m = q_ensamble.mean(axis=0), u_ensamble.mean(axis=0)
+
+    forma = q_p.shape
+    pesos = np.array(_pesos_area(b_grid, forma))
+    enmascarado = mascara_estructuras_locales(l_grid, b_grid)
+    usable = np.isfinite(q_p) & np.isfinite(u_p) & ~enmascarado
+    abs_b = np.abs(np.broadcast_to(np.asarray(b_grid, dtype=float), forma))
+    paso_b = float(np.min(np.abs(np.diff(np.asarray(b_grid, dtype=float)))))
+    q_trivial, u_trivial = 1.0 / np.sin(np.maximum(abs_b, paso_b)), np.zeros(forma)
+
+    def amplitud(sel, q_t, u_t):
+        # Mínimos cuadrados con a >= 0: una amplitud negativa sería una
+        # emisividad negativa; si la plantilla está anticorrelacionada con
+        # Planck, no remueve nada (a = 0) en vez de "remover" con el signo
+        # cambiado.
+        a = np.sum(pesos[sel] * (q_p[sel] * q_t[sel] + u_p[sel] * u_t[sel])) / np.sum(
+            pesos[sel] * (q_t[sel] ** 2 + u_t[sel] ** 2)
+        )
+        return float(max(a, 0.0))
+
+    def fraccion_removida(sel, a, q_t, u_t):
+        r_q, r_u = q_p - a * q_t, u_p - a * u_t
+        residuo = np.sum(pesos[sel] * (r_q[sel] ** 2 + r_u[sel] ** 2 - varianza_ruido[sel]))
+        total = np.sum(pesos[sel] * (q_p[sel] ** 2 + u_p[sel] ** 2 - varianza_ruido[sel]))
+        return float(1.0 - residuo / total)
+
+    potencia_total = np.sum((pesos * (q_p**2 + u_p**2))[usable])
+    # La amplitud única se ajusta sin la franja con posible fuga I→P (ver
+    # REGIONES_REMOCION), que si no la fija ella sola.
+    sin_franja = usable & ~_seleccion_region(l_grid, b_grid, REGIONES_REMOCION["franja_interior"])
+    amplitud_global = amplitud(sin_franja, q_m, u_m)
+    q_restado, u_restado = np.full(forma, np.nan), np.full(forma, np.nan)
+    regiones = {}
+    for nombre, region in REGIONES_REMOCION.items():
+        sel = usable & _seleccion_region(l_grid, b_grid, region)
+        a = amplitud(sel, q_m, u_m)
+        por_realizacion = [
+            fraccion_removida(sel, amplitud(sel, q, u), q, u) for q, u in zip(q_ensamble, u_ensamble)
+        ]
+        regiones[nombre] = {
+            "fraccion_potencia_planck": float(np.sum((pesos * (q_p**2 + u_p**2))[sel]) / potencia_total),
+            "amplitud": a,
+            "fraccion_removida_modelo": fraccion_removida(sel, a, q_m, u_m),
+            "fraccion_removida_una_realizacion_media": float(np.mean(por_realizacion)),
+            "fraccion_removida_una_realizacion_dispersion": float(np.std(por_realizacion, ddof=1)),
+            "fraccion_removida_plantilla_trivial": fraccion_removida(
+                sel, amplitud(sel, q_trivial, u_trivial), q_trivial, u_trivial
+            ),
+            "fraccion_removida_amplitud_global": fraccion_removida(sel, amplitud_global, q_m, u_m),
+        }
+        q_restado[sel], u_restado[sel] = a * q_m[sel], a * u_m[sel]
+
+    return {
+        "regiones": regiones,
+        "fraccion_removida_sin_franja_amplitud_global": fraccion_removida(
+            sin_franja, amplitud_global, q_m, u_m
+        ),
+        "n_realizaciones": int(len(q_ensamble)),
+        "mapas": {
+            "p_planck_k_rj": np.where(usable, np.hypot(q_p, u_p), np.nan),
+            "p_plantilla_k_rj": np.hypot(q_restado, u_restado),
+            "p_residuo_k_rj": np.where(usable, np.hypot(q_p - q_restado, u_p - u_restado), np.nan),
+        },
+        "criterio": (
+            "fracción de la potencia polarizada de Planck 30 GHz removida (ruido restado), "
+            "amplitud libre (>= 0) por región; comparada con una plantilla trivial y con "
+            "una amplitud única para todo el cielo sin la franja |b|<3° interior"
+        ),
+        "referencia": (
+            f"{planck['referencia']}; ajuste de plantilla como en Planck 2015 X (A&A 594, A10)"
+        ),
+    }
+
+
+# Regiones para el signo de la RM (l de 0 a 360). Son las que fijan la
+# geometría del campo regular: el plano por cuadrante (inversiones del
+# disco) y latitudes medias hacia la Galaxia interior (antisimetría
+# norte-sur del halo).
+REGIONES_SIGNO_RM = {
+    "plano, l=20-90": ((20.0, 90.0), (-5.0, 5.0)),
+    "plano, l=90-180": ((90.0, 180.0), (-5.0, 5.0)),
+    "plano, l=180-270": ((180.0, 270.0), (-5.0, 5.0)),
+    "plano, l=270-340": ((270.0, 340.0), (-5.0, 5.0)),
+    "norte, l=0-90, b=10-45": ((0.0, 90.0), (10.0, 45.0)),
+    "sur, l=0-90, b=-45-(-10)": ((0.0, 90.0), (-45.0, -10.0)),
+    "norte, l=270-360, b=10-45": ((270.0, 360.0), (10.0, 45.0)),
+    "sur, l=270-360, b=-45-(-10)": ((270.0, 360.0), (-45.0, -10.0)),
+}
+
+
+def signo_rm_por_region(l_grid, b_grid, rm_ensamble, rm_observado):
+    """
+    RM media (pesada por cos b) en cada región de `REGIONES_SIGNO_RM`, para
+    el modelo -media y dispersión entre las realizaciones de turbulencia de
+    `rm_ensamble` (N, n_l, n_b)- y para el mapa observado. El signo cuenta
+    como reproducido si la media del ensamble tiene el signo observado; la
+    dispersión dice si una sola realización podría tenerlo cambiado.
+    """
+    l_deg = np.mod(np.degrees(np.asarray(l_grid, dtype=float)), 360.0)[:, None]
+    b_deg = np.degrees(np.asarray(b_grid, dtype=float))[None, :]
+    rm_ensamble = np.asarray(rm_ensamble, dtype=float)
+    pesos = np.array(_pesos_area(b_grid, rm_ensamble.shape[1:]))
+    resultado = {}
+    for nombre, ((l_lo, l_hi), (b_lo, b_hi)) in REGIONES_SIGNO_RM.items():
+        sel = (l_deg >= l_lo) & (l_deg < l_hi) & (b_deg >= b_lo) & (b_deg < b_hi)
+        sel = np.broadcast_to(sel, pesos.shape) & np.isfinite(rm_observado)
+        medias = [float(np.average(rm[sel], weights=pesos[sel])) for rm in rm_ensamble]
+        observado = float(np.average(np.asarray(rm_observado)[sel], weights=pesos[sel]))
+        media = float(np.mean(medias))
+        resultado[nombre] = {
+            "rm_modelo_media": media,
+            "rm_modelo_dispersion": float(np.std(medias, ddof=1)),
+            "rm_observado": observado,
+            "signo_correcto": bool(np.sign(media) == np.sign(observado)),
+        }
+    return resultado

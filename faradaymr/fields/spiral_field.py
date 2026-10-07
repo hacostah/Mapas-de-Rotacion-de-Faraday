@@ -36,7 +36,7 @@ se implemente por separado.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -86,8 +86,10 @@ class LogarithmicSpiralField:
         Ángulo de paso de la espiral, en radianes. Debe coincidir con el
         `pitch_angle` que use el modelo de densidad de brazos (issue
         dependiente) para que campo y estructura de gas sean consistentes.
-        Valores típicos para la Vía Láctea son negativos (espiral trailing),
-        del orden de -11° a -13° (p.ej. Jansson & Farrar 2012: p≈-11.5°).
+        Para la Vía Láctea, |p| ~ 11-13° (Jansson & Farrar 2012: 11.5°). La
+        literatura lo escribe negativo porque mide el azimut en sentido
+        horario; con phi = arctan2(y, x) (antihorario) los brazos trailing
+        tienen p > 0 (ver `PITCH_ANGLE_DEG` en config_fisica.py).
     scale_radial : float
         Longitud de decaimiento exponencial de |B| con el radio R (mismas
         unidades que R).
@@ -98,6 +100,25 @@ class LogarithmicSpiralField:
         +1 o -1: sentido de enrollamiento global de la espiral (permite
         invertir el signo de B_R y B_phi sin cambiar el pitch angle, que
         solo fija el ángulo entre ambas componentes, no su signo global).
+    anillos_invertidos : tupla de (r_min, r_max)
+        Anillos radiales donde el campo cambia de sentido (B -> -B), como
+        la inversión entre el brazo local y el de Sagitario-Carina (modelo
+        ASS+RING de Sun et al. 2008; Van Eck et al. 2011). Vacía = sin
+        inversiones. El salto de B_R en el borde del anillo tiene
+        divergencia no nula, la misma aproximación que esos modelos.
+    ancho_vertical : float o None
+        None: perfil vertical exponencial, exp(-|z|/scale_height). Un valor
+        w: el corte del disco de JF12, 1 - L(z, scale_height, w) con
+        L = 1/(1 + exp(-2(|z| - h)/w)), complementario al encendido del
+        halo toroidal (`ToroidalHaloField`), para que disco y halo se
+        empalmen sin un hueco en |z| ~ h.
+    radio_nucleo : float o None
+        Dentro de este radio el módulo deja de crecer exponencialmente y se
+        queda en su valor en `radio_nucleo` (como B_c dentro de R_c = 5 kpc
+        en Sun et al. 2008). None: exponencial hasta R = 0.
+    radio_sin_campo : float o None
+        Dentro de este radio el campo del disco es cero (JF12 no define el
+        disco en R < 3 kpc, la región de la barra). None: sin corte.
     """
 
     b0: float
@@ -106,6 +127,10 @@ class LogarithmicSpiralField:
     scale_radial: float
     scale_height: float
     handedness: int = 1
+    anillos_invertidos: tuple = field(default_factory=tuple)
+    ancho_vertical: float | None = None
+    radio_nucleo: float | None = None
+    radio_sin_campo: float | None = None
 
     def __post_init__(self):
         if self.handedness not in (1, -1):
@@ -139,11 +164,25 @@ class LogarithmicSpiralField:
         # un NaN.
         radio_seguro = xp.where(radio == 0, 1e-12, radio)
 
+        if self.ancho_vertical is None:
+            perfil_vertical = xp.exp(-xp.abs(z) / self.scale_height)
+        else:
+            perfil_vertical = 1.0 - 1.0 / (
+                1.0 + xp.exp(-2.0 * (xp.abs(z) - self.scale_height) / self.ancho_vertical)
+            )
+        radio_envolvente = radio_seguro
+        if self.radio_nucleo is not None:
+            radio_envolvente = xp.maximum(radio_seguro, self.radio_nucleo)
         b_mag = (
             self.b0
-            * xp.exp(-(radio_seguro - self.r0) / self.scale_radial)
-            * xp.exp(-xp.abs(z) / self.scale_height)
+            * xp.exp(-(radio_envolvente - self.r0) / self.scale_radial)
+            * perfil_vertical
         )
+        if self.radio_sin_campo is not None:
+            b_mag = xp.where(radio < self.radio_sin_campo, 0.0, b_mag)
+
+        for r_min, r_max in self.anillos_invertidos:
+            b_mag = xp.where((radio >= r_min) & (radio < r_max), -b_mag, b_mag)
 
         b_radial = self.handedness * b_mag * xp.sin(self.pitch_angle)
         b_azimutal = self.handedness * b_mag * xp.cos(self.pitch_angle)

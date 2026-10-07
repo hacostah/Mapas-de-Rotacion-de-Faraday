@@ -1,4 +1,5 @@
 from .gaussian_random_field import GaussianRandomVectorField
+from .halo_field import ToroidalHaloField, XField
 from .spiral_field import LogarithmicSpiralField
 
 # Los perfiles de densidad radial (beta, doble beta, NFW, tabulado) vivían
@@ -20,6 +21,8 @@ from ..simulation import (
 __all__ = [
     "GaussianRandomVectorField",
     "LogarithmicSpiralField",
+    "ToroidalHaloField",
+    "XField",
     "DensityProfile",
     "BetaModel",
     "DoubleBetaModel",

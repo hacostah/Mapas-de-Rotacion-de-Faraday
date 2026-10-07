@@ -77,6 +77,51 @@ def validar_rm_polo(
     )
 
 
+def rms_rm_alta_latitud(rm_map, b_grid, b_min_deg=60.0):
+    """
+    RMS de la RM (ponderado por cos b, el ángulo sólido de cada píxel de la
+    grilla l-b) en las bandas |b| >= b_min_deg.
+
+    Es el estadístico correcto para comparar contra el cielo real a alta
+    latitud: la RM hacia UNA línea de visión (p.ej. el píxel más cercano
+    al polo) depende de la realización particular de la turbulencia y de la
+    longitud elegida, mientras que la dispersión sobre toda la calota polar
+    no.
+    """
+    import numpy as np
+
+    rm_map = np.asarray(rm_map, dtype=float)
+    b_grid = np.asarray(b_grid, dtype=float)
+    banda = np.abs(b_grid) >= np.radians(b_min_deg)
+    datos = rm_map[:, banda]
+    pesos = np.broadcast_to(np.cos(b_grid[banda]), datos.shape)
+    return float(np.sqrt(np.average(datos**2, weights=pesos)))
+
+
+def validar_rms_rm_alta_latitud(
+    rms_modelo: float,
+    rango_referencia=(2.0, 12.0),
+    referencia: str = (
+        "RMS de la Faraday depth de Oppermann et al. (2012, A&A 542, A93) "
+        "para |b| >= 60 grados, medido en el mapa HEALPix del proyecto "
+        "(data/external): entre ~6 y ~9 rad/m^2 según la banda de latitud. "
+        "Es la cota inferior: la reconstrucción suaviza escalas pequeñas; el "
+        "catálogo NVSS (Taylor+2009) da ~15-20 rad/m^2 en las mismas bandas "
+        "con el ruido de medida restado (ver comparacion_perfil_latitud.png)."
+    ),
+) -> ResultadoCalibracion:
+    """Compara la dispersión de la RM sintética en la calota polar contra
+    la del cielo real (ver `rms_rm_alta_latitud`)."""
+    dentro = rango_referencia[0] <= rms_modelo <= rango_referencia[1]
+    return ResultadoCalibracion(
+        nombre="RMS de RM a |b| >= 60 grados",
+        valor_modelo=rms_modelo,
+        rango_referencia=rango_referencia,
+        referencia=referencia,
+        dentro_de_tolerancia=dentro,
+    )
+
+
 def dm_hacia_direccion(ne, observer_pos, direction, dl, dx, box_size, xp=None):
     """
     Medida de dispersión (DM = integral( n_e dl )) a lo largo de un único

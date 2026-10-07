@@ -3,8 +3,9 @@ Comparación/sustracción del foreground galáctico sintético contra datos
 reales (issue #37): carga los mapas de la última corrida de `run.py` desde
 `results/foreground_galactico`, los compara contra tres conjuntos de datos
 observacionales reales (ver `faradaymr.observational` para las referencias
-y las limitaciones de cada comparación), genera las figuras de comparación
-y deja un resumen numérico en JSON.
+y las limitaciones de cada comparación), valida el modelo contra Planck
+LFI 30 GHz (`validar_contra_planck_030ghz`), genera las figuras de
+comparación y deja un resumen numérico en JSON.
 
 No vuelve a correr la simulación (usa lo que `run.py` ya dejó guardado en
 disco con `faradaymr.io.save_maps`): comparar contra datos reales es un
@@ -23,13 +24,15 @@ import os
 import numpy as np
 
 from faradaymr import observational as obs
-from faradaymr.io import load_map, save_maps
+from faradaymr.io import load_map
 from faradaymr.plotting_comparacion import (
     dispersion_catalogo_vs_modelo,
     histograma_comparacion_rm,
     mapa_comparacion_mollweide,
+    mapa_remocion_planck,
+    mapa_validacion_planck,
     mapa_morfologia_sincrotron,
-    mapa_resta_planck,
+    perfil_rm_vs_longitud,
     perfil_comparacion_latitud,
 )
 
@@ -52,44 +55,62 @@ def ejecutar_comparacion(ruta_resultados: str = RUTA_RESULTADOS):
     print("Comparando morfología sincrotrón contra Haslam et al. (1982, 408 MHz)...")
     resultado_morf = obs.comparar_morfologia_sincrotron(l_grid, b_grid, i_map)
 
-    print("Restando el foreground sintético (reescalado) contra Planck 30GHz...")
-    resultado_planck = obs.restar_planck_030ghz(l_grid, b_grid, i_map)
+    print("Signo de la RM por región (media y dispersión entre realizaciones)...")
+    signos_rm = obs.signo_rm_por_region(
+        l_grid, b_grid, load_map(ruta_resultados, "rm_mapa_ensamble"), resultado_opp["rm_obs_grid"]
+    )
+
+    print("Validando contra Planck LFI 30 GHz (ángulo, forma de P y perfiles en latitud)...")
+    resultado_planck = obs.validar_contra_planck_030ghz(
+        l_grid,
+        b_grid,
+        load_map(ruta_resultados, "stokes_q_030ghz_ensamble"),
+        load_map(ruta_resultados, "stokes_u_030ghz_ensamble"),
+    )
+
+    print("Removiendo el foreground polarizado de Planck 30 GHz (ajuste de plantilla)...")
+    resultado_remocion = obs.remover_foreground_polarizado_planck(
+        l_grid,
+        b_grid,
+        load_map(ruta_resultados, "stokes_q_030ghz_ensamble"),
+        load_map(ruta_resultados, "stokes_u_030ghz_ensamble"),
+    )
 
     print("Generando figuras de comparación...")
     mapa_comparacion_mollweide(ruta_resultados, l_grid, b_grid, rm_map, resultado_opp["rm_obs_grid"])
-    perfil_comparacion_latitud(ruta_resultados, resultado_opp["perfil_modelo"], resultado_opp["perfil_obs"])
+    bordes_bandas = np.linspace(0.0, float(np.max(np.abs(np.degrees(b_grid)))), 18)
+    perfil_nvss = obs.perfil_rms_catalogo_vs_latitud(resultado_cat, bordes_bandas)
+    perfil_comparacion_latitud(
+        ruta_resultados, resultado_opp["perfil_modelo"], resultado_opp["perfil_obs"],
+        perfil_catalogo=perfil_nvss,
+    )
     dispersion_catalogo_vs_modelo(ruta_resultados, resultado_cat)
     histograma_comparacion_rm(
         ruta_resultados,
         np.asarray(rm_map).ravel(),
         resultado_opp["rm_obs_grid"].ravel(),
         resultado_cat["rm_obs"],
+        pesos_mapa_flat=np.broadcast_to(
+            np.cos(np.asarray(b_grid)), np.shape(rm_map)
+        ).ravel(),
     )
     mapa_morfologia_sincrotron(ruta_resultados, l_grid, b_grid, resultado_morf)
-    mapa_resta_planck(ruta_resultados, l_grid, b_grid, resultado_planck)
+    perfil_rm_vs_longitud(ruta_resultados, l_grid, b_grid, rm_map, resultado_opp["rm_obs_grid"])
+    mapa_validacion_planck(ruta_resultados, l_grid, b_grid, resultado_planck)
+    mapa_remocion_planck(ruta_resultados, l_grid, b_grid, resultado_remocion)
 
-    # El producto de datos en sí (no solo la figura): el mapa ya limpio de
-    # foreground sintético, listo para usarse aguas abajo (p.ej. un
-    # análisis de B-modos de CMB) sin tener que volver a correr esta
-    # comparación completa cada vez.
-    ruta_planck = os.path.join(ruta_resultados, "resta_planck_030ghz")
-    save_maps(
-        ruta_planck,
-        {
-            "i_planck_030ghz_k_cmb": resultado_planck["i_planck_grid"],
-            "i_modelo_escalado_k_cmb": resultado_planck["i_modelo_escalado"],
-            "residuo_k_cmb": resultado_planck["residuo"],
-            "l_grid": l_grid,
-            "b_grid": b_grid,
-        },
-    )
-
+    rms_nvss_por_banda = dict(zip(np.round(perfil_nvss["centros_deg"], 3), perfil_nvss["valores"]))
     perfil_b = [
         {
             "b_deg": float(b),
             "rms_modelo": float(vm),
             "rms_oppermann": float(vo),
             "razon_modelo_sobre_obs": float(vm / vo) if vo != 0 else None,
+            "rms_nvss_sin_ruido": (
+                float(rms_nvss_por_banda[round(float(b), 3)])
+                if round(float(b), 3) in rms_nvss_por_banda
+                else None
+            ),
         }
         for b, vm, vo in zip(
             resultado_opp["perfil_modelo"]["centros_deg"],
@@ -118,12 +139,15 @@ def ejecutar_comparacion(ruta_resultados: str = RUTA_RESULTADOS):
             "referencia": resultado_morf["referencia"],
             "correlacion_log_pearson": resultado_morf["correlacion_log_pearson"],
         },
-        "resta_planck_030ghz": {
-            "referencia": resultado_planck["referencia"],
-            "alpha_reescalado": resultado_planck["alpha"],
-            "rms_planck_k_cmb": resultado_planck["rms_planck"],
-            "rms_residuo_k_cmb": resultado_planck["rms_residuo"],
-            "fraccion_varianza_explicada": resultado_planck["fraccion_varianza_explicada"],
+        # Los mapas y los perfiles completos van a la figura, no al resumen.
+        "validacion_planck_030ghz": {
+            clave: valor
+            for clave, valor in resultado_planck.items()
+            if clave not in ("mapas", "perfiles")
+        },
+        "signo_rm_por_region": signos_rm,
+        "remocion_foreground_planck_030ghz": {
+            clave: valor for clave, valor in resultado_remocion.items() if clave != "mapas"
         },
     }
 

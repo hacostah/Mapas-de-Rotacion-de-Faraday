@@ -31,7 +31,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 import numpy as _np
 
@@ -43,19 +43,15 @@ _logger = logging.getLogger(__name__)
 
 def power_law_spectrum(xp, k_mag, spectral_index, k_min, k_max):
     """
-    Amplitud espectral sigma(k) ∝ k^{-(n+2)/2}, no nula solo entre k_min y
-    k_max.
+    Amplitud espectral del POTENCIAL VECTORIAL, sigma_A(k) = k^{-(n+4)/2},
+    no nula solo entre k_min y k_max.
 
-    n es el índice del espectro de potencia de
-    energía, P(k) ∝ k^{-n} (n=5/3 sería Kolmogorov, n=2 es lo típico para
-    turbulencia de campo magnético en el ICM). La amplitud del campo (no de
-    su energía) escala como la raíz de P(k), de ahí el exponente -(n+2)/2:
-    el +2 viene de pasar de densidad de energía por modo a densidad de
-    energía por intervalo de k en 3D (el volumen de un cascarón esférico en
-    k crece como k^2). k_min y k_max representan la escala de inyección
-    (remolinos más grandes, Lambda_max) y la escala de disipación (remolinos
-    más chicos, Lambda_min): fuera de ese rango no hay turbulencia que
-    modelar, así que la amplitud es cero.
+    Como B_k = i k x A_k, |B_k|^2 ~ k^2 |A_k|^2 ~ k^{-(n+2)}, y la energía
+    por intervalo de k, E(k) ~ 4 pi k^2 |B_k|^2, queda E(k) ~ k^{-n}: con
+    n = 5/3 es el espectro de Kolmogorov (con n=2, el típico del ICM).
+    Ese es el sentido de "índice espectral" en todo el módulo. k_min y
+    k_max son las escalas de inyección y de disipación; fuera de ese rango
+    la amplitud es cero.
     """
     zeta = spectral_index + 4.0
     k_safe = xp.where(k_mag == 0, 1e-20, k_mag)
@@ -146,17 +142,64 @@ class GaussianRandomVectorField:
         (ver `faradaymr.pipeline`), no a quien genera la textura turbulenta.
         """
         xp = get_backend(use_gpu)
+        return self._rotacional(xp, *self._potencial_k(xp, rng))
+
+    @medir_tiempo_kernel
+    def sample_with_envelope(self, envelope, use_gpu: Optional[bool] = None, rng=None):
+        """
+        Como `sample`, pero con la amplitud modulada en el espacio por
+        `envelope` (arreglo (n, n, n), p.ej. un decaimiento con la altura
+        sobre el disco galáctico).
+
+        Multiplicar B por la envolvente rompería ∇·B = 0
+        (∇·(f B) = ∇f · B). Por eso se modula el potencial vectorial y
+        después se toma el rotacional: B = ∇×(f A) sigue siendo exactamente
+        solenoidal. Para una envolvente suave respecto a la escala de la
+        turbulencia, B ≈ f ∇×A y el espectro casi no cambia. La caja se
+        trata como periódica (FFT), así que la envolvente debería ser
+        pequeña en los bordes.
+        """
+        xp = get_backend(use_gpu)
+        ifftn, fftn = xp.fft.ifftn, xp.fft.fftn
+        envelope = xp.asarray(envelope)
+        potencial_modulado = [
+            fftn(envelope * ifftn(a_k).real) for a_k in self._potencial_k(xp, rng)
+        ]
+        return self._rotacional(xp, *potencial_modulado)
+
+    def integral_scale(self):
+        """
+        Longitud integral del campo, L = (pi/2) ∫E(k)/k dk / ∫E(k) dk, con
+        E(k) ∝ k^-n entre k = pi/scale_max y pi/scale_min (misma convención
+        de k que `_grid_y_espectro`). Es la longitud de coherencia que entra
+        en la RM de un campo aleatorio, sigma_RM ∝ B_rms sqrt(L · camino).
+        Analítica, para no depender de la malla.
+        """
+        n = self.spectral_index
+        k_min, k_max = _np.pi / self.scale_max, _np.pi / self.scale_min
+
+        def integral_potencia(exponente):
+            # ∫ k^-exponente dk entre k_min y k_max
+            if _np.isclose(exponente, 1.0):
+                return _np.log(k_max / k_min)
+            return (k_min ** (1 - exponente) - k_max ** (1 - exponente)) / (exponente - 1)
+
+        return float(_np.pi / 2 * integral_potencia(n + 1) / integral_potencia(n))
+
+    def _potencial_k(self, xp, rng):
+        """Potencial vectorial aleatorio A_k: amplitud Rayleigh y fase uniforme por modo."""
         random = xp.random if rng is None else rng
-
-        kx, ky, kz, sigma_k = self._grid_y_espectro(xp)
-
+        _, _, _, sigma_k = self._grid_y_espectro(xp)
         potencial_vectorial = []
         for _ in range(3):
             fase = 2.0 * xp.pi * xp.asarray(random.random((self.n, self.n, self.n)))
             amplitud = xp.asarray(random.rayleigh(1.0, (self.n, self.n, self.n)))
             potencial_vectorial.append(sigma_k * amplitud * xp.exp(1j * fase))
-        ax_k, ay_k, az_k = potencial_vectorial
+        return potencial_vectorial
 
+    def _rotacional(self, xp, ax_k, ay_k, az_k):
+        """B = ∇×A en el espacio real, a partir de A_k (B_k = i k × A_k)."""
+        kx, ky, kz, _ = self._grid_y_espectro(xp)
         bx_k = 1j * (ky * az_k - kz * ay_k)
         by_k = 1j * (kz * ax_k - kx * az_k)
         bz_k = 1j * (kx * ay_k - ky * ax_k)
