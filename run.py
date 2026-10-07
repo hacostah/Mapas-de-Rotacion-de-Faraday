@@ -49,6 +49,13 @@ def ejecutar_corrida(
     logger = configurar_logging(directorio_logs=RUTA_LOGS, id_simulacion=id_simulacion)
 
     xp = get_backend(use_gpu)
+    if cfg.N_BASE >= 256 and xp.__name__ == "numpy":
+        logger.warning(
+            "Perfil %s (malla %d³) sin GPU: corre en numpy, tarda decenas de "
+            "minutos y necesita ~5 GB de RAM. Instalar cupy para usar la GPU, "
+            "o FARADAYMR_PERFIL_RESOLUCION=rapido para una prueba rápida.",
+            cfg.cfg_units.PERFIL_RESOLUCION, cfg.N_BASE,
+        )
     rng = np.random.RandomState(seed) if seed is not None else None
     ruta_absoluta = os.path.abspath(ruta_destino)
 

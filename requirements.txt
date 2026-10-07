@@ -10,9 +10,9 @@ h5py
 healpy
 reproject
 
-# GPU (Colab): instalar la build de cupy que coincide con el CUDA de la
-# imagen (ver Faraday_MR_Colab.ipynb, sección "Instalar dependencias" -
-# detecta la versión de CUDA e instala el paquete correcto sola). No se
-# fija una versión aquí porque depende del runtime de Colab en el momento
-# de correr, no de este proyecto -en local sin GPU, dejar comentada.
-# cupy-cuda12x
+# GPU: la corrida de producción (perfil "exhaustivo", ver config_fisica.py)
+# usa cupy si está instalado. En Google Colab ya viene preinstalado con la
+# versión de su CUDA: NO instalar otro (dos cupy distintos se rompen entre
+# sí, p. ej. "libcufft.so.11: cannot open shared object file"). En otra
+# máquina, instalar el que coincide con `nvcc --version` (cupy-cuda12x,
+# cupy-cuda13x, ...). Sin GPU, el código corre en numpy.

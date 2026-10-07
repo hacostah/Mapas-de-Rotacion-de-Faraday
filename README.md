@@ -64,15 +64,18 @@ python data/external/descargar_datos.py   # una vez, para la comparación observ
 python compare_observaciones.py  # comparación/resta contra datos reales
 ```
 
-Así corre el perfil "rápido" (malla 64³, CPU, ~1 min), que es el de los
-números de este README. La corrida pesada (perfil "exhaustivo": malla 256³
-con celdas de 0.125 kpc, cielo de 1°) está en `Faraday_MR_Colab.ipynb`, para
-GPU. El notebook trae el código (de GitHub o de un zip subido) y comprueba
-que cupy y numpy den el mismo cielo. Después elige el tamaño de lote según
-la memoria de la GPU, recalibra `FACTOR_CAMPO_REGULAR` a esa resolución,
-corre la simulación y la comparación, y deja en
-`results/foreground_galactico/parametros_corrida.json` el factor usado, la
-GPU y los tiempos.
+Por defecto corre la versión pesada (perfil "exhaustivo", ver
+`config_fisica.py`): malla de 256³ celdas de 0.125 kpc, cielo de 1°, paso de
+0.025 kpc y 8 realizaciones de la turbulencia. Si cupy está instalado (en
+Colab ya viene; no instalar otro, ver `requirements.txt`) `run.py` integra en GPU y elige solo el tamaño de lote
+según la memoria libre; sin GPU corre en numpy, más lento y con ~5 GB de
+RAM. Para probar cambios rápido (malla 64³, ~1 min en CPU, el perfil de los
+tests):
+
+```bash
+FARADAYMR_PERFIL_RESOLUCION=rapido python run.py
+FARADAYMR_PERFIL_RESOLUCION=rapido python compare_observaciones.py
+```
 
 `run.py` deja todo en `results/foreground_galactico/`: los mapas
 (`rm_mapa.npy`, `intensidad.npy`, `stokes_q.npy`, `stokes_u.npy`, los
@@ -268,15 +271,13 @@ cuánto foreground remueve y dónde, frente a una plantilla trivial.
 
 ## Limitaciones
 
-- **Turbulencia sub-resuelta.** La malla (0.5 kpc) solo resuelve escalas de
-  1-6 kpc contra ~0.1 kpc en el ISM real. La amplitud efectiva (0.74 µG)
+- **Turbulencia sub-resuelta.** La malla resuelve escalas de 0.25-6 kpc
+  (perfil exhaustivo; 1-6 kpc en el rápido) contra ~0.1 kpc en el ISM real. La amplitud efectiva (0.74 µG)
   reproduce la RM aleatoria, pero no la despolarización: P/I a 1.4 GHz
   sale demasiado alto, y la turbulencia de kpc da una varianza de
-  realización grande en la RM de cuadrantes enteros. El perfil
-  `FARADAYMR_PERFIL_RESOLUCION=exhaustivo` (celdas de 0.125 kpc) resuelve
-  4 veces más fino; está pensado para GPU (`Faraday_MR_Colab.ipynb`) y no
-  se ha corrido para esta versión del modelo (la malla de 256³ con 8
-  realizaciones necesita del orden de varios GB de memoria).
+  realización grande en la RM de cuadrantes enteros. El perfil exhaustivo
+  (celdas de 0.125 kpc) baja la escala mínima a 0.25 kpc, todavía mayor que
+  la del ISM real.
 - **Galaxia interior en polarización.** La plantilla no remueve nada en
   |l| < 90° (ver *Remoción*), que concentra ~80 % de la potencia
   polarizada de Planck a 30 GHz.

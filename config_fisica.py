@@ -15,7 +15,7 @@ import os
 
 import astropy.units as u
 
-# --- Perfil de resolución: "rapido" (CPU, por defecto) o "exhaustivo" (GPU) ---
+# --- Perfil de resolución: "exhaustivo" (por defecto, GPU) o "rapido" (CPU) ---
 # Los parámetros de malla/mapa de cielo de más abajo (N_BASE, N_L, N_B, DL,
 # PIXEL_CHUNK_SIZE) son los únicos que dependen de este perfil -no son
 # físicos, solo determinan cuánto detalle numérico se resuelve y cuánto
@@ -24,24 +24,21 @@ import astropy.units as u
 # dependen del perfil: son los mismos disco/campo/observador sin importar
 # a qué resolución se muestreen.
 #
-# "rapido" (default): la resolución ya validada en esta sesión contra datos
-# reales (ver `resumen_comparacion_observacional.json`) -corre en segundos
-# en CPU pura (numpy), sin necesitar GPU. `ARM_WIDTH` (ver más abajo) queda
-# sub-resuelta a esta resolución (literalmente 1 celda) -un hueco real,
-# conocido, que NO se corrige acá para no invalidar la calibración
-# estadística de `B0_REGULAR`/`B0_TURBULENTO` ya hecha contra esta misma
-# resolución (ver esa nota más abajo) sin volver a correrla.
+# "exhaustivo" (por defecto): malla de 256³ celdas de 0.125 kpc (resuelve
+# `ARM_WIDTH` con 4 celdas, el disco magnético con 3 y la turbulencia
+# hasta 0.25 kpc), mapa de cielo de 1° y paso de 0.025 kpc. Pensado para
+# GPU (`run.py` usa cupy si está instalado, ver `faradaymr.get_backend`).
+# En CPU también corre, pero lento y con ~5 GB de RAM.
 #
-# "exhaustivo": 64x más celdas en la malla 3D (4x por eje) y 4x más
-# píxeles en el mapa de cielo -resuelve `ARM_WIDTH` con 4 celdas en vez de
-# 1, y el mapa de cielo se acerca más a la resolución angular de los datos
-# reales (ver `faradaymr.observational`). Pensado para correr con
-# `use_gpu=True` (ver `faradaymr.get_backend`); en CPU puede tardar minutos
-# en vez de segundos. Activar con la variable de entorno
-# `FARADAYMR_PERFIL_RESOLUCION=exhaustivo` ANTES de importar este módulo
-# (ver `Faraday_MR_Colab.ipynb`, que la fija antes de correr `run.py`) -por
-# defecto ("rapido") no cambia nada del comportamiento ya validado.
-PERFIL_RESOLUCION = os.environ.get("FARADAYMR_PERFIL_RESOLUCION", "rapido")
+# "rapido": malla de 64³ celdas de 0.5 kpc, cielo de 2°, paso de 0.1 kpc;
+# corre en ~1 min en CPU. Es el que usan los tests (`conftest.py`) y sirve
+# para probar cambios. Activar con `FARADAYMR_PERFIL_RESOLUCION=rapido`
+# ANTES de importar este módulo.
+#
+# La calibración del campo regular no depende del perfil: el ajuste de
+# `calibrar_amplitud_campo.py` da 1.01 en "rapido" y 1.02 en "exhaustivo"
+# (ver FACTOR_CAMPO_REGULAR).
+PERFIL_RESOLUCION = os.environ.get("FARADAYMR_PERFIL_RESOLUCION", "exhaustivo")
 if PERFIL_RESOLUCION not in ("rapido", "exhaustivo"):
     raise ValueError(
         f"FARADAYMR_PERFIL_RESOLUCION={PERFIL_RESOLUCION!r} no reconocido "
@@ -162,8 +159,10 @@ PITCH_ANGLE_DEG = 12.0
 # el campo regular quedaba castigado por un exceso que no era suyo.
 # Última calibración (con la inversión interior, ANILLOS_INVERSION_CAMPO,
 # y el núcleo de RADIO_NUCLEO_B / RADIO_SIN_CAMPO_B): 0.80 (Oppermann) y
-# 1.25 (NVSS), media geométrica 1.00. Es decir, con la geometría completa
-# las amplitudes publicadas del campo regular no necesitan reescalarse.
+# 1.25 (NVSS), media geométrica 1.01 en el perfil rápido; 0.86 y 1.21,
+# media 1.02, en el exhaustivo. Es decir, con la geometría completa las
+# amplitudes publicadas del campo regular no necesitan reescalarse, a
+# ninguna de las dos resoluciones.
 FACTOR_CAMPO_REGULAR = 1.0
 
 # Disco (espiral logarítmica).
@@ -326,25 +325,31 @@ else:
     N_B = 91
     DL = 0.1 * u.kpc  # paso de integración a lo largo de cada rayo
 
-# Cuántos píxeles (l, b) se resuelven juntos en un solo lote vectorizado
-# dentro de `faradaymr.los_raytrace.sky_map` (ver docstring de esa
-# función). No es un parámetro físico -no cambia ningún resultado, solo
-# el pico de memoria de GPU/CPU durante el cómputo-, así que vive acá por
-# conveniencia de tener un solo lugar de configuración por corrida, no
-# porque tenga significado físico. 8192 es conservador para una GPU de
-# Colab de gama media (T4, 16GB): con N_L=180, N_B=91 (16380 píxeles en
-# total) ya entra en dos lotes; subir este número en una GPU con más
-# memoria (A100) acelera la corrida al reducir el número de lanzamientos
-# de kernel, bajarlo es la manera de correr en una GPU con menos memoria
-# o en CPU con RAM limitada. En el perfil "exhaustivo" (más píxeles, más
-# celdas por campo) se sube a 16384 -pensado para una GPU con más memoria
-# que un T4 (A100, L4); bajarlo si la GPU asignada por Colab tiene menos
-# memoria y el cómputo falla por falta de memoria.
-PIXEL_CHUNK_SIZE = 16384 if PERFIL_RESOLUCION == "exhaustivo" else 8192
-# En el perfil exhaustivo cada píxel del lote ocupa ~220 KB de GPU (~1300
-# muestras por rayo, cinco campos interpolados más los acumulados), así
-# que 16384 píxeles son ~3.6 GB por lote. `Faraday_MR_Colab.ipynb` elige
-# el tamaño según la memoria libre de la GPU asignada y lo pasa con esta
-# variable de entorno (antes de importar este módulo).
-if os.environ.get("FARADAYMR_PIXEL_CHUNK_SIZE"):
-    PIXEL_CHUNK_SIZE = int(os.environ["FARADAYMR_PIXEL_CHUNK_SIZE"])
+# Cuántos píxeles (l, b) se integran juntos en un lote vectorizado de
+# `faradaymr.los_raytrace.sky_map`. No es un parámetro físico: no cambia
+# ningún resultado, solo el pico de memoria. En el perfil exhaustivo cada
+# píxel del lote ocupa ~220 KB (~1300 muestras por rayo, cinco campos
+# interpolados más los acumulados), así que el tamaño se elige según la
+# memoria libre de la GPU, dejando ~6 GB para los campos 256³ y sus
+# copias. Sin GPU se usan 2048 píxeles (~0.45 GB por lote). Se puede fijar
+# a mano con la variable de entorno FARADAYMR_PIXEL_CHUNK_SIZE.
+BYTES_POR_PIXEL_EXHAUSTIVO = 220e3
+RESERVA_CAMPOS_GPU_BYTES = 6e9
+
+
+def _lote_de_pixeles():
+    if os.environ.get("FARADAYMR_PIXEL_CHUNK_SIZE"):
+        return int(os.environ["FARADAYMR_PIXEL_CHUNK_SIZE"])
+    if PERFIL_RESOLUCION == "rapido":
+        return 8192
+    try:
+        import cupy
+
+        libre, _ = cupy.cuda.runtime.memGetInfo()
+    except Exception:  # sin cupy o sin GPU: se integra en CPU
+        return 2048
+    lote = int(0.6 * (libre - RESERVA_CAMPOS_GPU_BYTES) / BYTES_POR_PIXEL_EXHAUSTIVO)
+    return max(1024, min(32768, lote // 1024 * 1024))
+
+
+PIXEL_CHUNK_SIZE = _lote_de_pixeles()
