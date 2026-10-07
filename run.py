@@ -39,47 +39,26 @@ RUTA_RESULTADOS = os.path.join(
 RUTA_LOGS = os.path.join(os.path.dirname(__file__), "results", "logs")
 
 
-def ejecutar_corrida(
-    ruta_destino: str = RUTA_RESULTADOS,
-    use_gpu=None,
-    seed: int | None = 0,
-    arm_contrast: bool = True,
+def radios_campo_regular():
+    """Radios con significado en el campo regular del disco, para la figura de líneas de campo."""
+    radios = []
+    if cfg.RADIO_SIN_CAMPO_B_KPC is not None:
+        radios.append((cfg.RADIO_SIN_CAMPO_B_KPC, f"R = {cfg.RADIO_SIN_CAMPO_B_KPC:g} kpc: sin campo de disco (barra); dentro, solo el halo débil"))
+    for r_min, r_max in cfg.ANILLOS_INVERSION_CAMPO_KPC:
+        radios.append((r_max, f"R = {r_max:g} kpc: dentro, campo invertido"))
+    return radios
+
+
+def figuras_estructura(
+    ruta_destino, bx, by, bz, ne, observer_pos, box_size, dx,
+    componentes_regular, componentes_turbulento, use_gpu=None, seed=0,
 ):
-    id_simulacion = generar_id_simulacion()
-    logger = configurar_logging(directorio_logs=RUTA_LOGS, id_simulacion=id_simulacion)
-
+    """
+    Figuras de estructura 3D del escenario (disco, perfiles, líneas de
+    campo, turbulencia). Aparte de `ejecutar_corrida` para poder rehacerlas
+    sin volver a integrar el cielo: `python run.py --solo-estructura`.
+    """
     xp = get_backend(use_gpu)
-    if cfg.N_BASE >= 256 and xp.__name__ == "numpy":
-        logger.warning(
-            "Perfil %s (malla %d³) sin GPU: corre en numpy, tarda decenas de "
-            "minutos y necesita ~5 GB de RAM. Instalar cupy para usar la GPU, "
-            "o FARADAYMR_PERFIL_RESOLUCION=rapido para una prueba rápida.",
-            cfg.cfg_units.PERFIL_RESOLUCION, cfg.N_BASE,
-        )
-    rng = np.random.RandomState(seed) if seed is not None else None
-    ruta_absoluta = os.path.abspath(ruta_destino)
-
-    logger.info(
-        "Corrida %s: foreground galáctico (N=%d, dx=%.2f kpc, brazos=%s, GPU=%s)",
-        id_simulacion,
-        cfg.N_BASE,
-        cfg.DX_BASE_KPC,
-        arm_contrast,
-        use_gpu,
-    )
-
-    logger.info(
-        "Generando plasma magnetizado (disco + brazos + campo regular + "
-        "turbulencia)..."
-    )
-    (
-        bx, by, bz, ne, ne_rel, observer_pos, box_size, dx,
-        componentes_regular, componentes_turbulento,
-    ) = construir_escenario(
-        use_gpu=use_gpu, rng=rng, arm_contrast=arm_contrast, return_components=True
-    )
-
-    logger.info("Generando gráficos de estructura 3D (disco + campo)...")
     # Misma densidad pero sin brazos: referencia para separar, en las
     # figuras, el aporte de los brazos de la caída radial del disco.
     ne_axisimetrico = construir_escenario(
@@ -133,6 +112,65 @@ def ejecutar_corrida(
         # `power_law_spectrum` usa k = pi / escala como corte
         k_banda=(np.pi / cfg.LAMBDA_MAX_KPC, np.pi / cfg.LAMBDA_MIN_KPC),
         turbulento_homogeneo=tuple(to_numpy(c) for c in turbulento_homogeneo),
+        radios_campo=radios_campo_regular(),
+    )
+
+
+
+def solo_figuras_estructura(ruta_destino: str = RUTA_RESULTADOS, use_gpu=None, seed: int | None = 0):
+    """Reconstruye el escenario (misma semilla que `ejecutar_corrida`) y rehace solo sus figuras."""
+    rng = np.random.RandomState(seed) if seed is not None else None
+    (bx, by, bz, ne, _ne_rel, observer_pos, box_size, dx, regular, turbulento) = construir_escenario(
+        use_gpu=use_gpu, rng=rng, return_components=True
+    )
+    figuras_estructura(ruta_destino, bx, by, bz, ne, observer_pos, box_size, dx, regular, turbulento,
+                       use_gpu=use_gpu, seed=seed)
+
+
+def ejecutar_corrida(
+    ruta_destino: str = RUTA_RESULTADOS,
+    use_gpu=None,
+    seed: int | None = 0,
+    arm_contrast: bool = True,
+):
+    id_simulacion = generar_id_simulacion()
+    logger = configurar_logging(directorio_logs=RUTA_LOGS, id_simulacion=id_simulacion)
+
+    xp = get_backend(use_gpu)
+    if cfg.N_BASE >= 256 and xp.__name__ == "numpy":
+        logger.warning(
+            "Perfil %s (malla %d³) sin GPU: corre en numpy, tarda decenas de "
+            "minutos y necesita ~5 GB de RAM. Instalar cupy para usar la GPU, "
+            "o FARADAYMR_PERFIL_RESOLUCION=rapido para una prueba rápida.",
+            cfg.cfg_units.PERFIL_RESOLUCION, cfg.N_BASE,
+        )
+    rng = np.random.RandomState(seed) if seed is not None else None
+    ruta_absoluta = os.path.abspath(ruta_destino)
+
+    logger.info(
+        "Corrida %s: foreground galáctico (N=%d, dx=%.2f kpc, brazos=%s, GPU=%s)",
+        id_simulacion,
+        cfg.N_BASE,
+        cfg.DX_BASE_KPC,
+        arm_contrast,
+        use_gpu,
+    )
+
+    logger.info(
+        "Generando plasma magnetizado (disco + brazos + campo regular + "
+        "turbulencia)..."
+    )
+    (
+        bx, by, bz, ne, ne_rel, observer_pos, box_size, dx,
+        componentes_regular, componentes_turbulento,
+    ) = construir_escenario(
+        use_gpu=use_gpu, rng=rng, arm_contrast=arm_contrast, return_components=True
+    )
+
+    logger.info("Generando gráficos de estructura 3D (disco + campo)...")
+    figuras_estructura(
+        ruta_destino, bx, by, bz, ne, observer_pos, box_size, dx,
+        componentes_regular, componentes_turbulento, use_gpu=use_gpu, seed=seed,
     )
 
     l_grid = xp.linspace(-xp.pi, xp.pi, cfg.N_L, endpoint=False)
@@ -259,6 +297,9 @@ def ejecutar_corrida(
         to_numpy(i_map),
         to_numpy(q_map),
         to_numpy(u_map),
+        to_numpy(i_map_30),
+        to_numpy(q_map_30),
+        to_numpy(u_map_30),
         p_index=cfg.P_SPEC,
     )
 
@@ -302,4 +343,9 @@ def ejecutar_corrida(
 
 
 if __name__ == "__main__":
-    ejecutar_corrida()
+    import sys
+
+    if "--solo-estructura" in sys.argv:
+        solo_figuras_estructura()
+    else:
+        ejecutar_corrida()

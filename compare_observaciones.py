@@ -93,6 +93,10 @@ def ejecutar_comparacion(ruta_resultados: str = RUTA_RESULTADOS):
         pesos_mapa_flat=np.broadcast_to(
             np.cos(np.asarray(b_grid)), np.shape(rm_map)
         ).ravel(),
+        abs_b_mapa_flat=np.broadcast_to(
+            np.abs(np.degrees(np.asarray(b_grid))), np.shape(rm_map)
+        ).ravel(),
+        abs_b_catalogo=np.abs(resultado_cat["b_deg"]),
     )
     mapa_morfologia_sincrotron(ruta_resultados, l_grid, b_grid, resultado_morf)
     perfil_rm_vs_longitud(ruta_resultados, l_grid, b_grid, rm_map, resultado_opp["rm_obs_grid"])

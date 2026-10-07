@@ -24,6 +24,8 @@ import os
 
 import numpy as np
 
+from . import estilo_figuras as estilo
+
 from .analysis.spatial_stats import isotropic_energy_spectrum
 
 # El modelo de densidad extiende los brazos hasta R -> 0, donde una
@@ -90,6 +92,8 @@ def figura_disco_y_brazos(
     la fase o el pitch de la densidad y los de la curva no coinciden.
     """
     import matplotlib.pyplot as plt
+
+    estilo.aplicar()
     from matplotlib.colors import LogNorm
 
     eje = _eje_centrado_en_gc(dx, box_size)
@@ -101,6 +105,8 @@ def figura_disco_y_brazos(
     fig, axes = plt.subplots(1, n_paneles, figsize=(6.4 * n_paneles, 5.6), squeeze=False)
     axes = axes[0]
 
+    for ax in axes:
+        ax.grid(False)
     img = axes[0].imshow(
         corte.T, origin="lower", extent=extent, cmap="inferno",
         norm=LogNorm(vmin=corte.max() / 50.0, vmax=corte.max()),
@@ -131,12 +137,12 @@ def figura_disco_y_brazos(
             r_inicio = R_MIN_CURVA_BRAZO_KPC if arm_r_min is None else arm_r_min
             x, y = _curva_brazo_espiral(pitch_angle, r0, fase, r_inicio, r_max)
             dentro = (np.abs(x) <= eje[-1]) & (np.abs(y) <= eje[-1])
-            ax.plot(x[dentro], y[dentro], "-", color="cyan", lw=0.9, alpha=0.8)
+            ax.plot(x[dentro], y[dentro], "--", color="white", lw=0.6, alpha=0.7)
         _marcar_gc_y_sol(ax, observer_pos_gc)
         ax.set_xlabel("x [kpc]")
         ax.set_ylabel("y [kpc]")
         ax.set_aspect("equal")
-    axes[0].legend(loc="upper right", fontsize=8)
+    axes[0].legend(loc="upper right", fontsize=8, frameon=True, facecolor="white", framealpha=0.9)
     fig.suptitle(f"Disco de {n_arms} brazos, visto desde el polo norte galáctico", y=1.0)
     fig.tight_layout()
     return _guardar(fig, ruta_destino, nombre_archivo)
@@ -177,6 +183,8 @@ def figura_perfiles(
     """
     import matplotlib.pyplot as plt
 
+    estilo.aplicar()
+
     eje = _eje_centrado_en_gc(dx, box_size)
     radio = _radio_cilindrico(eje)
     k0 = _indice_mas_cercano(eje, 0.0)
@@ -199,10 +207,10 @@ def figura_perfiles(
 
     ax = axes[0]
     media, _ = _media_y_rms_en_anillos(ne[:, :, k0], radio, bordes)
-    ax.semilogy(r_centro, media, "o-", color="firebrick", ms=3, label="con brazos (media en azimut)")
+    ax.semilogy(r_centro, media, "o-", color=estilo.DENSIDAD, ms=3, label="con brazos (media en azimut)")
     if ne_axisimetrico is not None:
         ref, _ = _media_y_rms_en_anillos(np.asarray(ne_axisimetrico)[:, :, k0], radio, bordes)
-        ax.semilogy(r_centro, ref, "k--", label="sin brazos")
+        ax.semilogy(r_centro, ref, "--", color=estilo.REFERENCIA, label="sin brazos")
     ax.axvline(r0, color="gray", ls=":", lw=1)
     ax.set_xlabel("R [kpc]")
     ax.set_ylabel(r"$n_e$ [cm$^{-3}$]")
@@ -211,10 +219,10 @@ def figura_perfiles(
 
     ax = axes[1]
     media, _ = _media_y_rms_en_anillos(b_reg[:, :, k0], radio, bordes)
-    ax.semilogy(r_centro, media, "o-", color="steelblue", ms=3, label=r"$|B|$ regular (disco + halo)")
+    ax.semilogy(r_centro, media, "o-", color=estilo.CAMPO_REGULAR, ms=3, label=r"$|B|$ regular (disco + halo)")
     if b_turb is not None:
         _, rms = _media_y_rms_en_anillos(b_turb[:, :, k0], radio, bordes)
-        ax.semilogy(r_centro, rms, "s-", color="darkorange", ms=3, label=r"$B$ turbulento efectivo (RMS)")
+        ax.semilogy(r_centro, rms, "s-", color=estilo.CAMPO_TURBULENTO, ms=3, label=r"$B$ turbulento efectivo (RMS)")
     if escalas_b:
         # Misma forma que `LogarithmicSpiralField`: exponencial, constante
         # dentro de `radio_nucleo` y nula dentro de `radio_sin_campo`.
@@ -224,7 +232,7 @@ def figura_perfiles(
         envolvente = escalas_b["b0"] * np.exp(-(r_env - r0) / escalas_b["escala_radial_b"])
         if escalas_b.get("radio_sin_campo") is not None:
             envolvente = np.where(r_centro < escalas_b["radio_sin_campo"], np.nan, envolvente)
-        ax.semilogy(r_centro, envolvente, "k--", label="envolvente del disco")
+        ax.semilogy(r_centro, envolvente, "--", color=estilo.REFERENCIA, label="envolvente del disco")
     ax.axvline(r0, color="gray", ls=":", lw=1)
     ax.set_xlabel("R [kpc]")
     ax.set_ylabel(r"$B$ [$\mu$G]")
@@ -232,12 +240,12 @@ def figura_perfiles(
     ax.legend(fontsize=8)
 
     ax = axes[2]
-    ax.semilogy(z, vertical(ne), "o-", color="firebrick", ms=3, label=r"$n_e$")
-    ax.semilogy(z, vertical(b_reg), "o-", color="steelblue", ms=3, label=r"$|B|$ regular (disco + halo)")
+    ax.semilogy(z, vertical(ne), "o-", color=estilo.DENSIDAD, ms=3, label=r"$n_e$")
+    ax.semilogy(z, vertical(b_reg), "o-", color=estilo.CAMPO_REGULAR, ms=3, label=r"$|B|$ regular (disco + halo)")
     if b_turb is not None:
-        ax.semilogy(z, vertical(b_turb**2) ** 0.5, "s-", color="darkorange", ms=3, label=r"$B$ turbulento efectivo (RMS)")
+        ax.semilogy(z, vertical(b_turb**2) ** 0.5, "s-", color=estilo.CAMPO_TURBULENTO, ms=3, label=r"$B$ turbulento efectivo (RMS)")
     if ne_axisimetrico is not None:
-        ax.semilogy(z, vertical(np.asarray(ne_axisimetrico)), "k--", lw=1, label=r"$n_e$ sin brazos")
+        ax.semilogy(z, vertical(np.asarray(ne_axisimetrico)), "--", color=estilo.REFERENCIA, lw=1, label=r"$n_e$ sin brazos")
     if escalas_b:
         h_b, w_b = escalas_b["escala_altura_b"], escalas_b.get("ancho_vertical_b")
         z_fino = np.linspace(0.0, z.max(), 400)
@@ -248,7 +256,7 @@ def figura_perfiles(
                 return 1.0 - 1.0 / (1.0 + np.exp(-2.0 * (zz - h_b) / w_b))
             corte = corte_disco(z_fino) / corte_disco(0.0)
             etiqueta = r"disco: $1-L(z;h_B,w_B)$ (JF12)"
-        ax.semilogy(z_fino, corte, "k:", lw=1, label=etiqueta)
+        ax.semilogy(z_fino, corte, ":", color=estilo.REFERENCIA, lw=1.2, label=etiqueta)
         if escalas_b.get("nota_vertical"):
             ax.annotate(
                 escalas_b["nota_vertical"], xy=(0.5, 0.2), xytext=(1.6, 0.05),
@@ -272,15 +280,22 @@ def figura_perfiles(
 
 def figura_campo_regular_vs_total(
     ruta_destino, bx_reg, by_reg, bx_total, by_total, dx, box_size,
-    observer_pos_gc, nombre_archivo="estructura_campo.png",
+    observer_pos_gc, radios_marcados=(), nombre_archivo="estructura_campo.png",
 ):
     """
     Líneas de campo en z=0 con solo la componente regular (izquierda) y con
     regular + turbulenta (derecha), misma escala de color. Muestra por qué
     hace falta la componente regular: sin ella no queda una dirección
     coherente a lo largo de la línea de visión y la polarización se cancela.
+
+    `radios_marcados`: pares (R [kpc], etiqueta) dibujados como círculos
+    punteados en el panel del campo regular, p. ej. el radio de la
+    inversión del campo (dentro, las flechas giran al revés) y los del
+    núcleo.
     """
     import matplotlib.pyplot as plt
+
+    estilo.aplicar()
 
     eje = _eje_centrado_en_gc(dx, box_size)
     k0 = _indice_mas_cercano(eje, 0.0)
@@ -304,7 +319,14 @@ def figura_campo_regular_vs_total(
         ax.set_aspect("equal")
         ax.set_xlim(eje[0], eje[-1])
         ax.set_ylim(eje[0], eje[-1])
-    axes[0].legend(loc="upper right", fontsize=8)
+        ax.grid(False)
+    angulo = np.linspace(0.0, 2.0 * np.pi, 300)
+    for radio, etiqueta in radios_marcados:
+        axes[0].plot(radio * np.cos(angulo), radio * np.sin(angulo), ":", color="0.25", lw=1.1)
+        axes[0].annotate(etiqueta, (0.0, -radio), xytext=(0, -2), textcoords="offset points",
+                         ha="center", va="top", fontsize=7.5, color="0.15",
+                         bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8))
+    axes[0].legend(loc="upper right", fontsize=8, frameon=True, facecolor="white", framealpha=0.9)
     fig.colorbar(lineas.lines, ax=axes, fraction=0.025, pad=0.02).set_label(r"$|B_{xy}|$ [$\mu$G]")
     return _guardar(fig, ruta_destino, nombre_archivo)
 
@@ -344,6 +366,8 @@ def figura_turbulencia(
     """
     import matplotlib.pyplot as plt
 
+    estilo.aplicar()
+
     bx_t, by_t, bz_t = (np.asarray(c) for c in (bx_t, by_t, bz_t))
     eje = _eje_centrado_en_gc(dx, box_size)
     k0 = _indice_mas_cercano(eje, 0.0)
@@ -358,6 +382,7 @@ def figura_turbulencia(
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
 
     ax = axes[0, 0]
+    ax.grid(False)
     img = ax.imshow(b_mag_modelo[:, :, k0].T, origin="lower", cmap="viridis",
                     extent=[eje[0], eje[-1], eje[0], eje[-1]])
     fig.colorbar(img, ax=ax, fraction=0.046, pad=0.03).set_label(
@@ -378,15 +403,20 @@ def figura_turbulencia(
     if en_banda.sum() >= 3:
         pendiente, ordenada = np.polyfit(np.log(k[en_banda]), np.log(e_k[en_banda]), 1)
         kk = np.array(k_banda)
-        ax.loglog(kk, np.exp(ordenada) * kk**pendiente, "r-", lw=2,
+        ax.loglog(kk, np.exp(ordenada) * kk**pendiente, "-", color=estilo.CAMPO_TURBULENTO, lw=2,
                   label=f"ajuste en la banda: pendiente {pendiente:.2f}")
         impuesta = np.exp(ordenada) * kk[0] ** (pendiente + spectral_index) * kk ** (-spectral_index)
-        ax.loglog(kk, impuesta, "b--", lw=1.5, label=rf"impuesto: $k^{{-{spectral_index:.2f}}}$")
+        ax.loglog(kk, impuesta, "--", color=estilo.REFERENCIA, lw=1.5,
+                  label=rf"impuesto (Kolmogorov): $k^{{-{spectral_index:.2f}}}$")
     ax.axvspan(k.min(), k_banda[0], color="gray", alpha=0.15, label="fuera de la banda")
     ax.axvspan(k_banda[1], k.max(), color="gray", alpha=0.15)
-    ax.set_xticks([0.5, 1, 2, 3])
-    ax.set_xticklabels(["0.5", "1", "2", "3"])
-    ax.minorticks_off()
+    # Marcas en 1-2-5 por década: el rango de k depende de la malla
+    # (hasta ~6 kpc^-1 con 64³, ~25 con 256³).
+    from matplotlib.ticker import FuncFormatter, LogLocator
+
+    ax.xaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
     ax.set_xlabel(r"$k$ [kpc$^{-1}$]")
     ax.set_ylabel(r"$E(k)$ [$\mu{\rm G}^2$ kpc]")
     ax.set_title("Espectro de energía magnética" + sufijo, fontsize=10)
@@ -395,7 +425,7 @@ def figura_turbulencia(
     ax = axes[1, 0]
     comp = np.concatenate([bx_t.ravel(), by_t.ravel(), bz_t.ravel()])
     z = comp / comp.std()
-    ax.hist(z, bins=80, density=True, color="steelblue", alpha=0.7, label=r"$B_x, B_y, B_z$")
+    ax.hist(z, bins=80, density=True, color=estilo.CAMPO_REGULAR, alpha=0.7, label=r"$B_x, B_y, B_z$")
     xs = np.linspace(-5, 5, 300)
     ax.plot(xs, np.exp(-0.5 * xs**2) / np.sqrt(2 * np.pi), "k-", label=r"$\mathcal{N}(0,1)$")
     ax.set_yscale("log")
@@ -408,7 +438,7 @@ def figura_turbulencia(
     ax = axes[1, 1]
     s = b_rms / np.sqrt(3.0)
     bs = np.linspace(0, b_mag.max(), 300)
-    ax.hist(b_mag.ravel(), bins=80, density=True, color="darkorange", alpha=0.7, label="medido")
+    ax.hist(b_mag.ravel(), bins=80, density=True, color=estilo.CAMPO_TURBULENTO, alpha=0.7, label="medido")
     ax.plot(bs, np.sqrt(2 / np.pi) * bs**2 / s**3 * np.exp(-0.5 * (bs / s) ** 2), "k-",
             label="Maxwelliana (vector gaussiano isótropo)")
     ax.axvline(b_rms, color="gray", ls=":", label=rf"$B_{{\rm rms}}={b_rms:.2f}\,\mu$G")
@@ -431,7 +461,7 @@ def generar_graficos_estructura(
     ruta_destino, ne, bx, by, bz, dx, box_size, observer_pos,
     r0, pitch_angle, n_arms, phase0=0.0, arm_r_min=None, componentes_regular=None,
     componentes_turbulento=None, ne_axisimetrico=None, escalas_b=None,
-    spectral_index=5.0 / 3.0, k_banda=None, turbulento_homogeneo=None,
+    spectral_index=5.0 / 3.0, k_banda=None, turbulento_homogeneo=None, radios_campo=(),
 ):
     """
     Genera las figuras de estructura de una corrida y devuelve sus rutas.
@@ -461,7 +491,8 @@ def generar_graficos_estructura(
     if componentes_regular is not None:
         rutas.append(
             figura_campo_regular_vs_total(
-                ruta_destino, bx_reg, by_reg, bx, by, dx, box_size, observer_pos_gc
+                ruta_destino, bx_reg, by_reg, bx, by, dx, box_size, observer_pos_gc,
+                radios_marcados=radios_campo,
             )
         )
     if componentes_turbulento is not None:

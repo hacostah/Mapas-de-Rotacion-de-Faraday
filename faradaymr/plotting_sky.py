@@ -284,3 +284,121 @@ def mapa_sintetico_estilo_hammurabi(
         paneles,
         titulo_figura=titulo_figura,
     )
+
+
+def trazos_campo_magnetico(
+    ax, l_grid, b_grid, q_map, u_map, paso_l_deg=10.0, paso_b_deg=7.0, largo_deg=4.0,
+    umbral_pol=1e-2, color="white", mirror_l=True,
+):
+    """
+    Dibuja la orientación del campo magnético proyectado como trazos sin
+    flecha (una orientación no tiene sentido de recorrido), como en los
+    mapas de Planck. La emisión sincrotrón está polarizada
+    perpendicularmente al campo, así que la dirección del campo es el
+    ángulo de polarización ψ (IAU: desde el norte galáctico hacia el este,
+    es decir hacia l creciente) más 90°.
+
+    Con `mirror_l` la longitud se dibuja con x = -l, así que "este" (l
+    creciente) apunta hacia -x: un ángulo θ desde el norte da la dirección
+    (dx, dy) = (-sin θ, cos θ). El tramo en longitud se divide por cos b
+    para que todos los trazos midan lo mismo en el cielo. Solo se dibujan
+    donde P supera `umbral_pol` veces su máximo (donde el ángulo es ruido,
+    no se dibuja nada).
+    """
+    from matplotlib.collections import LineCollection
+
+    l_deg = np.degrees(np.asarray(l_grid, dtype=float))
+    b_deg = np.degrees(np.asarray(b_grid, dtype=float))
+    q_map, u_map = np.asarray(q_map, dtype=float), np.asarray(u_map, dtype=float)
+    p_map = np.hypot(q_map, u_map)
+    p_max = np.nanmax(p_map)
+
+    paso_l = max(1, int(round(paso_l_deg / abs(l_deg[1] - l_deg[0]))))
+    paso_b = max(1, int(round(paso_b_deg / abs(b_deg[1] - b_deg[0]))))
+    segmentos = []
+    for i in range(0, len(l_deg), paso_l):
+        for j in range(0, len(b_deg), paso_b):
+            if abs(b_deg[j]) > 78.0 or not p_map[i, j] >= umbral_pol * p_max:
+                continue
+            theta = 0.5 * np.arctan2(u_map[i, j], q_map[i, j]) + np.pi / 2.0
+            x0 = np.radians(-l_deg[i] if mirror_l else l_deg[i])
+            x0 = np.mod(x0 + np.pi, 2 * np.pi) - np.pi
+            y0 = np.radians(b_deg[j])
+            media = np.radians(largo_deg) / 2.0
+            signo_x = -1.0 if mirror_l else 1.0
+            dx = signo_x * np.sin(theta) * media / max(np.cos(y0), 0.2)
+            dy = np.cos(theta) * media
+            segmentos.append([(x0 - dx, y0 - dy), (x0 + dx, y0 + dy)])
+    ax.add_collection(LineCollection(segmentos, colors=color, linewidths=0.8, zorder=5))
+
+
+def mapa_de_cielo_sintetico(
+    ruta_destino: str,
+    l_grid,
+    b_grid,
+    rm_map,
+    i_map,
+    q_map,
+    u_map,
+    q_map_30,
+    u_map_30,
+    nombre_archivo: str = "mapa_de_cielo.png",
+):
+    """
+    El cielo sintético en cuatro paneles Mollweide (2x2):
+
+    (a) intensidad sincrotrón total a 1.4 GHz;
+    (b) medida de rotación (con signo: positiva = campo hacia el observador);
+    (c) intensidad polarizada a 1.4 GHz: los huecos oscuros en el plano son
+        despolarización por rotación de Faraday a lo largo de la línea de
+        visión;
+    (d) intensidad polarizada a 28.4 GHz (frecuencia de Planck, donde la
+        rotación de Faraday es despreciable) con la orientación del campo
+        magnético proyectado (trazos blancos).
+
+    I y P van normalizadas al máximo de I de su frecuencia (la emisividad no
+    está en unidades físicas), así que P/I_max se lee como fracción de
+    polarización respecto del máximo del cielo.
+    """
+    import matplotlib.pyplot as plt
+
+    from . import estilo_figuras as estilo
+
+    estilo.aplicar()
+    i_map = np.asarray(i_map, dtype=float)
+    i_max = float(np.nanmax(i_map))
+    p_14 = np.hypot(q_map, u_map) / i_max
+    p_30 = np.hypot(q_map_30, u_map_30)
+    p_30 = p_30 / float(np.nanmax(p_30))
+
+    paneles = [
+        (i_map / i_max, "(a) Intensidad sincrotrón, 1.4 GHz", r"$I\,/\,I_{\rm max}$",
+         estilo.MAPA_MAGNITUD, False, "log", {"rango_dinamico": 1e3}),
+        (rm_map, "(b) Medida de rotación (RM)", r"RM [rad m$^{-2}$]", estilo.MAPA_SIGNO, True,
+         "lineal", {}),
+        (p_14, "(c) Intensidad polarizada, 1.4 GHz\n(huecos: despolarización por Faraday)",
+         r"$P\,/\,I_{\rm max}$", estilo.MAPA_MAGNITUD, False, "log", {"rango_dinamico": 1e3}),
+        (p_30, "(d) Intensidad polarizada, 28.4 GHz (sin Faraday)\ny orientación del campo magnético",
+         r"$P\,/\,P_{\rm max}$", estilo.MAPA_MAGNITUD, False, "log", {"rango_dinamico": 1e3}),
+    ]
+    fig = plt.figure(figsize=(12.5, 9.2))
+    for k, (mapa, titulo, unidad, cmap, simetrico, escala, opciones) in enumerate(paneles):
+        ax = fig.add_subplot(2, 2, k + 1, projection="mollweide")
+        malla = mollweide_panel(ax, l_grid, b_grid, mapa, cmap=cmap, simetrico=simetrico,
+                                escala=escala, **opciones)
+        if k == 3:
+            trazos_campo_magnetico(ax, l_grid, b_grid, q_map_30, u_map_30)
+        ax.set_title(titulo, fontsize=10.5, pad=10)
+        cbar = fig.colorbar(malla, ax=ax, orientation="horizontal", fraction=0.05, pad=0.07,
+                            aspect=30, extend="both" if simetrico else "neither")
+        cbar.set_label(unidad, fontsize=8.5)
+        cbar.ax.tick_params(labelsize=7.5)
+        cbar.ax.grid(False)
+
+    fig.suptitle("Cielo sintético visto desde el Sol: disco + brazos + campo de disco y halo "
+                 "+ turbulencia", fontsize=12.5, y=1.0)
+    fig.tight_layout(h_pad=4.0)
+    ruta_completa = os.path.join(ruta_destino, nombre_archivo)
+    fig.savefig(ruta_completa)
+    plt.close(fig)
+    return ruta_completa

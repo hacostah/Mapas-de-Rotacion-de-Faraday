@@ -1068,6 +1068,17 @@ def validar_contra_planck_030ghz(
             "delta_psi": np.where(
                 detectado, 0.5 * np.angle(np.exp(2j * (psi_modelo - psi_planck))), np.nan
             ),
+            # Para la figura: |Δψ| (el signo no tiene significado físico)
+            # con la media del ensamble, en todo el cielo donde Planck
+            # detecta polarización a P/σ >= 3, también dentro de la máscara
+            # (que la figura solo contornea). La estadística usa `detectado`.
+            "abs_delta_psi_dibujo": np.where(
+                np.isfinite(p_planck) & (p_planck >= 3.0 * sigma_p),
+                np.abs(0.5 * np.angle(np.exp(2j * (
+                    angulo_polarizacion(q_ensamble.mean(axis=0), u_ensamble.mean(axis=0)) - psi_planck
+                )))),
+                np.nan,
+            ),
             "mascara": enmascarado,
         },
         "perfiles": perfiles,
@@ -1086,9 +1097,11 @@ def validar_contra_planck_030ghz(
 # franja |b| < 3° va aparte: ahí Q y U de Planck siguen a la intensidad
 # total (r = -0.76 y -0.89 en |l| < 60°, |b| < 2°, con Q/I ~ U/I ~ -1.5 %)
 # aunque a 30 GHz esa intensidad es sobre todo free-free y emisión anómala
-# de polvo, que no polarizan: es la firma de la fuga de intensidad a
-# polarización por desajuste de banda de LFI (Planck 2018 II), no de
-# sincrotrón.
+# de polvo, que no polarizan, y con un ángulo casi fijo (psi ~ -60°) a lo
+# largo de 80° de longitud, cuando el sincrotrón del disco daría un campo
+# paralelo al plano. Es lo que produce la fuga de intensidad a polarización
+# por desajuste de banda de LFI (Planck 2018 II): la explicación más
+# probable, no demostrada (haría falta la plantilla de corrección de Planck).
 REGIONES_REMOCION = {
     "franja_interior": {"l_deg": ((0.0, 90.0), (270.0, 360.0)), "b_abs_deg": (0.0, 3.0)},
     "plano_interior": {"l_deg": ((0.0, 90.0), (270.0, 360.0)), "b_abs_deg": (3.0, 20.0)},
@@ -1189,9 +1202,11 @@ def remover_foreground_polarizado_planck(
     sin_franja = usable & ~_seleccion_region(l_grid, b_grid, REGIONES_REMOCION["franja_interior"])
     amplitud_global = amplitud(sin_franja, q_m, u_m)
     q_restado, u_restado = np.full(forma, np.nan), np.full(forma, np.nan)
+    finito = np.isfinite(q_p) & np.isfinite(u_p)
     regiones = {}
     for nombre, region in REGIONES_REMOCION.items():
-        sel = usable & _seleccion_region(l_grid, b_grid, region)
+        en_region = _seleccion_region(l_grid, b_grid, region)
+        sel = usable & en_region
         a = amplitud(sel, q_m, u_m)
         por_realizacion = [
             fraccion_removida(sel, amplitud(sel, q, u), q, u) for q, u in zip(q_ensamble, u_ensamble)
@@ -1207,7 +1222,11 @@ def remover_foreground_polarizado_planck(
             ),
             "fraccion_removida_amplitud_global": fraccion_removida(sel, amplitud_global, q_m, u_m),
         }
-        q_restado[sel], u_restado[sel] = a * q_m[sel], a * u_m[sel]
+        # Para las figuras, la plantilla con la amplitud de su región se
+        # extiende también a las zonas enmascaradas (las estadísticas de
+        # arriba solo usan `sel`, sin máscara).
+        dibujo = finito & en_region
+        q_restado[dibujo], u_restado[dibujo] = a * q_m[dibujo], a * u_m[dibujo]
 
     return {
         "regiones": regiones,
@@ -1216,9 +1235,21 @@ def remover_foreground_polarizado_planck(
         ),
         "n_realizaciones": int(len(q_ensamble)),
         "mapas": {
-            "p_planck_k_rj": np.where(usable, np.hypot(q_p, u_p), np.nan),
+            "p_planck_k_rj": np.where(finito, np.hypot(q_p, u_p), np.nan),
             "p_plantilla_k_rj": np.hypot(q_restado, u_restado),
-            "p_residuo_k_rj": np.where(usable, np.hypot(q_p - q_restado, u_p - u_restado), np.nan),
+            "p_residuo_k_rj": np.hypot(q_p - q_restado, u_p - u_restado),
+            "mascara": enmascarado,
+            # Regiones donde la plantilla no remueve nada (< 1 %), para
+            # marcarlas en la figura.
+            "sin_remocion": np.any(
+                [
+                    _seleccion_region(l_grid, b_grid, REGIONES_REMOCION[nombre])
+                    for nombre, datos in regiones.items()
+                    if datos["fraccion_removida_modelo"] < 0.01
+                ]
+                or [np.zeros(forma, dtype=bool)],
+                axis=0,
+            ),
         },
         "criterio": (
             "fracción de la potencia polarizada de Planck 30 GHz removida (ruido restado), "

@@ -83,27 +83,58 @@ mismos a 28.4 GHz y el ensamble de realizaciones para Planck,
 `l_grid.npy`, `b_grid.npy`), un log por corrida en `results/logs/`, y las
 figuras:
 
-- `mapa_de_cielo.png` — I, P, ángulo de polarización (IAU) y RM en
-  Mollweide, estilo Waelkens et al. (2008, hammurabi).
-- `estadistica_mapa.png` — I(b) contra la ley 1/sin|b| de un disco
-  plano-paralelo, e histograma y perfil en |b| de P/I (con el tope teórico
-  (p+1)/(p+7/3)).
+Figuras de `run.py` (colores comunes en `faradaymr/estilo_figuras.py`: el
+modelo en naranja, las observaciones en azul, NVSS en verde agua, las
+referencias sin física en gris):
+
+- `mapa_de_cielo.png` — el cielo sintético en Mollweide: (a) intensidad a
+  1.4 GHz, (b) RM, (c) intensidad polarizada a 1.4 GHz (los huecos son
+  despolarización por Faraday) y (d) intensidad polarizada a 28.4 GHz con
+  la orientación del campo magnético proyectado en trazos, como en los
+  mapas de Planck.
+- `estadistica_mapa.png` — I(b) contra un disco plano-paralelo, y la
+  fracción de polarización contra |b| a 1.4 y 28.4 GHz con el tope
+  (p+1)/(p+7/3). Cerca del plano Faraday despolariza; a latitud alta, con
+  |RM| ~ 10 rad/m², la rotación puede repolarizar un poco al realinear el
+  campo del disco con el del halo (repolarización por rotación de Faraday
+  diferencial; Sokoloff et al. 1998).
 - `estructura_disco.png` — n_e en z=0 y contraste de brazos (n_e / n_e sin
-  brazos) con las curvas analíticas de los brazos encima.
-- `estructura_perfiles.png` — n_e, B regular y B turbulento contra R y |z|,
-  con sus envolventes de referencia.
-- `estructura_campo.png` — líneas de campo: solo regular vs regular +
-  turbulento (por qué hace falta la componente regular).
+  brazos), con las espirales analíticas en línea discontinua.
+- `estructura_perfiles.png` — n_e, B regular y B turbulento efectivo contra
+  R y |z|, con sus envolventes de referencia. El mínimo de |B| en
+  |z| ≈ 0.5 kpc es el cambio de sentido entre el disco y el halo norte.
+- `estructura_campo.png` — líneas de campo en z=0, solo regular y regular +
+  turbulento, con los radios de la inversión (7 kpc) y de la barra (3 kpc).
 - `estructura_turbulencia.png` — corte de |B_turb| del modelo, y espectro
   E(k) contra k^-5/3, gaussianidad y distribución de |B| del generador sin
   envolvente.
 
-`compare_observaciones.py` agrega en la misma carpeta
-`comparacion_{mapa_rm,perfil_latitud,rm_vs_longitud,histograma_rm,
-catalogo_nvss,morfologia_sincrotron}.png` y
-`validacion_planck_030ghz.png` (ver *Validación contra Planck 30 GHz*) y
-`remocion_foreground_planck.png` (ver *Remoción del foreground polarizado
-de Planck 30 GHz*).
+`python run.py --solo-estructura` rehace solo las cuatro figuras de
+estructura (misma semilla, sin integrar el cielo).
+
+`compare_observaciones.py` agrega en la misma carpeta:
+
+- `comparacion_mapa_rm.png` — RM del modelo, de Oppermann y su residuo,
+  con la misma escala de color.
+- `comparacion_perfil_latitud.png` — RMS(RM) contra |b|: modelo, Oppermann,
+  NVSS y la franja entre las dos estimaciones observacionales.
+- `comparacion_rm_vs_longitud.png` — RM con signo contra l: el plano, y
+  cada banda de latitud separada en norte y sur (el halo invierte el
+  signo entre hemisferios; promediarlos lo cancela).
+- `comparacion_catalogo_nvss.png` — RM del modelo contra la de 37 370
+  fuentes NVSS, como densidad, con la mediana del modelo y la diagonal 1:1;
+  plano y fuera del plano por separado.
+- `comparacion_histograma_rm.png` — distribución de la RM, plano y fuera
+  del plano.
+- `comparacion_morfologia_sincrotron.png` — forma de la intensidad contra
+  Haslam 408 MHz.
+- `validacion_planck_030ghz.png` — ver *Validación contra Planck 30 GHz*.
+- `remocion_foreground_planck.png` — ver *Remoción del foreground
+  polarizado de Planck 30 GHz*.
+
+En los mapas comparados con Planck, las estructuras locales excluidas de
+las estadísticas (loops, centro galáctico, Fan) van con contorno punteado,
+sin tapar los datos.
 
 Al final de `run.py`, `faradaymr.calibration` compara la RM y la DM
 sintéticas hacia el polo galáctico contra el rango publicado
@@ -144,31 +175,34 @@ modelo"; las comparaciones válidas son estadísticas (perfiles en |b|,
 histogramas) o punto a punto contra el catálogo (válida precisamente
 porque no depende de la fase, ver docstring del módulo).
 
-## Resultados (corrida de referencia, semilla 0)
+## Resultados (perfil exhaustivo en GPU, semilla 0)
 
-Estadísticas ponderadas por área (cos b). Números de
+Corrida de producción: malla de 256³, cielo de 1°, 8 realizaciones de la
+turbulencia. Estadísticas ponderadas por área (cos b). Números de
 `results/foreground_galactico/resumen_comparacion_observacional.json`.
+El perfil rápido (64³) da números parecidos salvo a alta latitud, donde
+su turbulencia más gruesa sube la RM (14 contra 8.7 rad/m² en el polo).
 
 ### Amplitud de la RM contra latitud
 
 | \|b\| | Modelo | Oppermann+2012 | NVSS (ruido restado) |
 |---|---|---|---|
-| 2.5° | 229 rad/m² | 186 | 152 |
-| 7.5° | 100 | 99 | 112 |
+| 2.5° | 241 rad/m² | 179 | 152 |
+| 7.5° | 107 | 100 | 112 |
 | 22.5° | 38 | 52 | 62 |
-| 42.5° | 22 | 17 | 23 |
-| 62.5° | 16 | 9.4 | 20 |
-| 82.5° | 14 | 6.2 | 15 |
-| Global | 79 | 70 | — |
+| 42.5° | 21 | 17 | 23 |
+| 62.5° | 13 | 9.4 | 20 |
+| 82.5° | 8.7 | 6.4 | 15 |
+| Global | 85 | 70 | — |
 
 Los dos conjuntos de datos encierran la RM galáctica real: la
 reconstrucción de Oppermann suaviza escalas pequeñas (cota inferior) y el
 catálogo NVSS incluye la RM intrínseca de cada fuente, ~6-10 rad/m²
-(Schnitzeler 2010; cota superior). El modelo sigue a NVSS a |b| > 40°, coincide
-con ambos en |b| < 15° (1.2-1.5× en la banda del plano) y queda ~30 % por
-debajo de los dos entre 15° y 40°. `run.py` marca la calota |b| ≥ 60° como
-FUERA DE RANGO porque su criterio (fijado antes) usa solo Oppermann; contra
-NVSS está dentro.
+(Schnitzeler 2010; cota superior). A |b| > 40° el modelo queda entre los
+dos; en |b| < 15° coincide con ambos salvo la banda del plano (1.3-1.6×), y
+entre 15° y 40° queda ~30 % por debajo de los dos (faltan las estructuras
+locales). La RMS en la calota |b| ≥ 60° es 10.9 rad/m², dentro del rango
+del chequeo de `run.py` (2-12 rad/m²).
 
 ### Signo de la RM (estructura del campo regular)
 
@@ -178,29 +212,33 @@ una sola realización, así que una sola semilla no basta):
 
 | Región | Modelo | Oppermann+2012 | Signo |
 |---|---|---|---|
-| Plano, l = 20-90° (Galaxia interior, Q1) | +99 ± 52 | +21 | ✓ |
-| Plano, l = 90-180° | −82 ± 21 | −83 | ✓ |
-| Plano, l = 180-270° | +115 ± 20 | +88 | ✓ |
-| Plano, l = 270-340° (Galaxia interior, Q4) | −0.3 ± 39 | +34 | ✗ (compatible con 0) |
-| 10° < b < 45°, l = 0-90° | +3.5 ± 20 | +31 | ✓ (marginal) |
-| −45° < b < −10°, l = 0-90° | −42 ± 21 | −37 | ✓ |
-| 10° < b < 45°, l = 270-360° | −22 ± 19 | −22 | ✓ |
-| −45° < b < −10°, l = 270-360° | +65 ± 19 | +21 | ✓ |
+| Plano, l = 20-90° (Galaxia interior, Q1) | +94 ± 18 | +23 | ✓ |
+| Plano, l = 90-180° | −74 ± 24 | −80 | ✓ |
+| Plano, l = 180-270° | +104 ± 20 | +85 | ✓ |
+| Plano, l = 270-340° (Galaxia interior, Q4) | −41 ± 48 | +35 | ✗ (compatible con 0 a 1σ) |
+| 10° < b < 45°, l = 0-90° | +15 ± 10 | +32 | ✓ |
+| −45° < b < −10°, l = 0-90° | −52 ± 14 | −37 | ✓ |
+| 10° < b < 45°, l = 270-360° | −19 ± 11 | −21 | ✓ |
+| −45° < b < −10°, l = 270-360° | +40 ± 18 | +21 | ✓ |
 
-7 de 8 signos. Correlación píxel a píxel con Oppermann (semilla 0): 0.56 en
-|b| < 10° y 0.39 en |b| > 10°; con las 37 370 fuentes NVSS: r = 0.37. La
+7 de 8 signos, incluida la antisimetría norte-sur del halo en las cuatro
+regiones de latitud media. Correlación píxel a píxel con Oppermann: 0.58 en
+|b| < 10° y 0.41 en |b| > 10°; con las 37 370 fuentes NVSS: r = 0.36. La
 Galaxia exterior (90° < l < 270°) coincide en signo y amplitud.
 
 ### Otros observables
 
 - DM hacia el polo: 31 pc cm⁻³ (NE2001: 20-40). OK.
 - Morfología sincrotrón contra Haslam 408 MHz: r = 0.83 en log-log. Sale
-  sobre todo del contraste plano-polo; fuera del plano el modelo cae más
-  rápido que Haslam (falta un halo de electrones relativistas más grueso
-  que `NE_REL_FRACCION` × n_e, y Haslam tiene un fondo isótropo).
-- P/I a 1.4 GHz: 0.3-0.6 de mediana, nunca por encima de
-  (p+1)/(p+7/3) = 0.75. El cielo real está muy por debajo: la turbulencia
-  de escala sub-kpc, que no resuelve esta malla, es la que despolariza.
+  sobre todo del contraste plano-polo. Fuera del plano el modelo cae más
+  que Haslam: a alta latitud queda en ~7 % del valor del plano, contra
+  ~20 % en Haslam. Parte de esa diferencia es el fondo isótropo de Haslam;
+  el resto, un halo de electrones relativistas más grueso que
+  `NE_REL_FRACCION` × n_e.
+- P/I a 1.4 GHz: mediana 0.25 en |b| < 10° y 0.53 en 30° < |b| < 60°, nunca
+  por encima de (p+1)/(p+7/3) = 0.75. El cielo real está muy por debajo:
+  la turbulencia de escala menor que 0.25 kpc, que no resuelve esta malla,
+  es la que despolariza.
 
 ## Validación contra Planck 30 GHz
 
@@ -208,18 +246,23 @@ Galaxia exterior (90° < l < 270°) coincide en signo y amplitud.
 30 GHz, donde la rotación de Faraday es despreciable) para 8 realizaciones
 de la turbulencia, y `validar_contra_planck_030ghz` sigue el procedimiento
 de Planck Int. XLII (2016): solo polarización, varianza galáctica entre
-realizaciones y máscaras de loops/spurs, centro galáctico y Fan. Planck se
-pasa a K_RJ y a la convención IAU (U_IAU = −U_COSMO) y se degrada a
-nside=32. Criterios fijados antes de ver el resultado:
+realizaciones y máscaras de loops/spurs, centro galáctico y Fan (en las
+figuras, contorno punteado). Planck se pasa a K_RJ y a la convención IAU
+(U_IAU = −U_COSMO) y se degrada a nside=32. Criterios fijados antes de ver
+el resultado:
 
 | Prueba | Criterio | Modelo | Resultado |
 |---|---|---|---|
-| Ángulo de polarización, ⟨cos 2Δψ⟩ en píxeles con P/σ ≥ 5 | ≥ 0.5 y mayor que la plantilla ψ=0 (0.15) | 0.27 ± 0.07 | no pasa |
-| Forma de P, R² con fondo libre | mayor que un disco plano-paralelo (0.31) | 0.40 ± 0.04 | pasa |
-| Perfiles de P en latitud (informativa) | — | χ²_red = 2.5 (Galaxia interior), 1.3 (3er cuadrante); 97-100 % de bandas a ≤ 3σ | — |
+| Ángulo de polarización, ⟨cos 2Δψ⟩ en píxeles con P/σ ≥ 5 | ≥ 0.5 y mayor que la plantilla ψ=0 (0.17) | 0.28 ± 0.07 | no pasa |
+| Forma de P, R² con fondo libre | mayor que un disco plano-paralelo (0.37) | 0.38 ± 0.05 | pasa (por poco) |
+| Perfiles de P en latitud (informativa) | — | Galaxia interior: χ²_red = 1.9, 100 % de bandas a ≤ 3σ, datos/modelo = 1.03; 3er cuadrante: χ²_red = 2.9, el modelo subestima el pico del plano | — |
 
 **La validación global no pasa** por el ángulo: el modelo mejora la
-plantilla trivial, pero queda lejos de 0.5. Las estructuras locales que
+plantilla trivial, pero queda lejos de 0.5. El promedio lo hunde el plano:
+fuera de él el acuerdo es bueno (⟨cos 2Δψ⟩ = 0.75-0.85 a |b| > 10°, ver
+*Remoción*), mientras que en |b| < 10° el ángulo de Planck no tiene la
+orientación de un campo paralelo al disco (ver la franja interior más
+abajo). Las estructuras locales que
 dominan la polarización a 30 GHz (Loop I / North Polar Spur, Fan) están
 enmascaradas, pero el campo a gran escala del modelo no tiene la
 componente fuera del plano con la orientación correcta en todo el cielo.
@@ -238,36 +281,50 @@ restado y sin las estructuras locales enmascaradas (figura
 
 | Región | % de la potencia de Planck | Modelo | Una realización | Plantilla trivial (campo ∥ plano) |
 |---|---|---|---|---|
-| Alta latitud, \|b\| > 20° | 4 % | **36 %** | 25 ± 5 % | 3 % |
-| Plano exterior, 90° < l < 270°, \|b\| < 20° | 16 % | **50 %** | 37 ± 14 % | 46 % |
-| Plano interior, \|l\| < 90°, 3° < \|b\| < 20° | 5 % | 0 % | 0 % | 0 % |
-| Franja interior, \|l\| < 90°, \|b\| < 3° | 75 % | 0 % | 0 % | 0 % |
+| Alta latitud, \|b\| > 20° | 5 % | **38 %** | 23 ± 10 % | 2 % |
+| Plano exterior, 90° < l < 270°, \|b\| < 20° | 18 % | **51 %** | 42 ± 7 % | 38 % |
+| Plano interior, \|l\| < 90°, 3° < \|b\| < 20° | 4 % | 0 % | 0 % | 0 % |
+| Franja interior, \|l\| < 90°, \|b\| < 3° | 73 % | 0 % | 0 % | 0 % |
 
 Con una sola amplitud para todo el cielo (sin la franja) se remueve el
-12 %: 31 % a alta latitud y 23 % en el plano exterior, pero se agrega
+10 %: 24 % a alta latitud y 20 % en el plano exterior, pero se agrega
 potencia en la Galaxia interior. El modelo reparte mal la emisión entre la
 Galaxia interior y la exterior.
 
 Lectura:
 
-- **A alta latitud el modelo remueve ~12 veces más que la plantilla
-  trivial.** Ahí es donde se observa el CMB, y es el resultado que sostiene
-  el objetivo del proyecto. Lo aporta la geometría del campo regular
-  (halo de JF12 y espiral): el ángulo del modelo coincide con el de Planck
-  con ⟨cos 2Δψ⟩ = 0.6-0.7 a |b| > 10°.
-- **En el plano exterior empata con la plantilla trivial:** el campo es
-  casi paralelo al plano y eso ya lo da una plantilla sin física.
-- **En la Galaxia interior no remueve nada.** En la franja |b| < 3°, Q y U de
-  Planck siguen a la intensidad total (r = −0.76 y −0.89 en |l| < 60°,
-  |b| < 2°, con Q/I ≈ U/I ≈ −1.5 %), aunque a 30 GHz esa intensidad es
-  sobre todo free-free y emisión anómala, que no polarizan: es la firma de
-  la fuga de intensidad a polarización de LFI (Planck 2018 II), no de
-  sincrotrón. Entre 3° y 20° el fallo es del modelo: le falta la geometría
-  real de la Galaxia interior (varias inversiones, tangencias de brazos).
+- **A alta latitud el modelo remueve ~16 veces más que la plantilla
+  trivial (38 % contra 2 %).** Ahí es donde se observa el CMB, y es el
+  resultado que sostiene el objetivo del proyecto. Lo aporta la geometría
+  del campo regular (halo de JF12 y espiral): fuera de las máscaras y
+  donde Planck detecta polarización (P/σ ≥ 5), el ángulo del modelo
+  coincide con el de Planck con ⟨cos 2Δψ⟩ = 0.79 (10°-20°), 0.85
+  (20°-40°) y 0.75 (|b| > 40°).
+- **En el plano exterior supera a la plantilla trivial (51 % contra 38 %)**,
+  aunque ahí el campo es casi paralelo al plano y una plantilla sin física
+  ya remueve bastante.
+- **En la Galaxia interior no remueve nada** (rayado en la figura). En la
+  franja |b| < 3°, Q y U de Planck siguen a la intensidad total
+  (r = −0.76 y −0.89 en |l| < 60°, |b| < 2°, con Q/I ≈ U/I ≈ −1.5 %), aunque
+  a 30 GHz esa intensidad es sobre todo free-free y emisión anómala, que no
+  polarizan. Además, el ángulo de Planck en esa franja es casi el mismo
+  (ψ ≈ −50° a −70°, campo a ~25-40° de la vertical) a lo largo de 80° de
+  longitud, cuando el sincrotrón del disco daría un campo paralelo al plano
+  (como sí ocurre en el plano exterior, ψ ≈ 0°). Un ángulo fijo con P ∝ I es
+  lo que produce la fuga de intensidad a polarización por desajuste de
+  banda de LFI (Planck 2018 II). Es la explicación más probable, pero no
+  está demostrada: confirmarla requiere las plantillas de corrección de
+  fuga de Planck. Entre 3° y 20° el fallo es del
+  modelo: le falta la geometría real de la Galaxia interior (varias
+  inversiones, tangencias de brazos).
+- **Lo que queda en el residuo a alta latitud son las estructuras locales**
+  (North Polar Spur y los demás loops), excluidas del ajuste y fuera del
+  alcance de un modelo de gran escala.
 
 Una réplica exacta no se alcanza: es un modelo de juguete con fase de
-brazos arbitraria y turbulencia de escala kpc. Lo que sí queda medido es
-cuánto foreground remueve y dónde, frente a una plantilla trivial.
+brazos arbitraria y turbulencia de escala sub-kpc sin resolver. Lo que sí
+queda medido es cuánto foreground remueve y dónde, frente a una plantilla
+trivial.
 
 ## Limitaciones
 
