@@ -24,6 +24,7 @@ from .simulation import (
 )
 from .pipeline import ObservationConfig, ObservationPipeline, ObservationResult
 from .analysis.spatial_stats import radial_profile, transverse_rm_dispersion
+from .analysis.expected import expected_rm_dispersion_map
 
 __all__ = [
     "get_backend",
@@ -50,6 +51,7 @@ __all__ = [
     "Plotter",
     "radial_profile",
     "transverse_rm_dispersion",
+    "expected_rm_dispersion_map",
 ]
 
 __version__ = "0.2.0"

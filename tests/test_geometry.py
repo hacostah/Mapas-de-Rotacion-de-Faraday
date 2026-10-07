@@ -1,6 +1,11 @@
 import numpy as np
 import pytest
-from faradaymr.simulation.geometry import cylindrical_radius, filament_axis_from_viewing_angle, projected_axis_distance
+from faradaymr.simulation.geometry import (
+    cylindrical_radius,
+    filament_axis_from_viewing_angle,
+    projected_axis_distance,
+    sky_footprint_mask,
+)
 
 def test_cylindrical_radius_eje_z():
     """Prueba que el radio cilíndrico respecto al eje Z ignora la coordenada Z."""
@@ -88,3 +93,107 @@ def test_projected_axis_distance_caso_degenerado_no_lanza_error():
     # Filamento paralelo a la línea de visión: proyección nula en (x,y).
     d = projected_axis_distance((5, 5), [0.0, 0.0, 1.0], pixel_size=1.0, xp=np)
     assert np.all(np.isfinite(d))
+
+
+def test_projected_axis_distance_theta_cero_es_radial_no_arbitraria():
+    # Bug corregido: con el eje paralelo a la LOS (theta=0), la proyección
+    # sobre el cielo es un punto, no una recta -la vista es circularmente
+    # simétrica. La versión anterior caía en una convención arbitraria
+    # ([1,0]) y terminaba midiendo |y| en vez de la distancia radial
+    # sqrt(x^2+y^2), rompiendo esa simetría justo en el caso más usado del
+    # barrido en theta (theta=0, "de frente").
+    d = projected_axis_distance((7, 7), [0.0, 0.0, 1.0], pixel_size=1.0, xp=np)
+    x = np.arange(7) - 7 // 2
+    y = np.arange(7) - 7 // 2
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    esperado = np.sqrt(xx.astype(float) ** 2 + yy.astype(float) ** 2)
+    np.testing.assert_allclose(d, esperado)
+    # Puntos a la misma distancia radial en distintas direcciones deben dar
+    # el mismo valor -con la convención anterior (|y|) esto fallaba, por
+    # ejemplo, entre (3,0) y (0,3) respecto al centro.
+    centro = 7 // 2
+    assert np.isclose(d[centro + 3, centro], d[centro, centro + 3])
+
+
+def test_sky_footprint_mask_excluye_fuera_del_umbral():
+    ne = np.zeros((4, 4, 10))
+    ne[1, 1, :] = 1.0  # una columna con densidad apreciable en toda su LOS
+    ne[2, 2, 3:6] = 1.0  # una columna con densidad solo en una parte de la LOS
+    mascara = sky_footprint_mask(ne, umbral_relativo=1e-3)
+    assert mascara.shape == (4, 4)
+    assert mascara[1, 1]
+    assert mascara[2, 2]
+    assert not mascara[0, 0]
+    assert not mascara[3, 3]
+
+
+def test_sky_footprint_mask_todo_cero_no_lanza_error():
+    ne = np.zeros((3, 3, 5))
+    mascara = sky_footprint_mask(ne)
+    assert mascara.shape == (3, 3)
+    assert not np.any(mascara)
+
+def test_filament_body_mask_limites_fisicos():
+    import numpy as np
+    from faradaymr.simulation.geometry import filament_body_mask
+    # De lado (theta=90°): se conserva toda la longitud proyectada L/2.
+    m = filament_body_mask((101, 101), [1.0, 0.0, 0.0], 10.0, longitud=600.0, r_core=100.0, xp=np)
+    x = (np.arange(101) - 50) * 10.0
+    assert m[np.abs(x) <= 300.0, :].all() and not m[np.abs(x) > 300.0, :].any()
+    # De frente (theta=0°): la proyección es un punto -> todo el mapa.
+    assert filament_body_mask((11, 11), [0.0, 0.0, 1.0], 10.0, 600.0, 100.0, xp=np).all()
+    # Inclinado: |u| <= L sin/2 - r_c cos, siempre más angosto que la huella L sin/2.
+    t = np.deg2rad(45.0)
+    m45 = filament_body_mask((201, 201), [np.sin(t), 0.0, np.cos(t)], 10.0, 2000.0, 300.0, xp=np)
+    x = (np.arange(201) - 100) * 10.0
+    limite = 2000.0 * np.sin(t) / 2 - 300.0 * np.cos(t)
+    assert m45[np.abs(x) <= limite].all() and not m45[np.abs(x) > limite].any()
+
+
+def test_rm_acumulada_del_pipeline_usa_dl_en_pc():
+    """La rotación de Faraday interna (Q/U) debe usar el mismo dl en pc que el mapa de RM."""
+    import numpy as np
+    from faradaymr import ObservationConfig, ObservationPipeline
+    rng = np.random.RandomState(0)
+    n = 8
+    bx, by, bz = (rng.normal(size=(n, n, n)) for _ in range(3))
+    ne = np.full((n, n, n), 1e-3)
+    cfg = ObservationConfig(pixel_size=20.0, dl=20000.0, frequency=1.4e9, wavelength=0.214, p_index=3.0)
+    r1 = ObservationPipeline(config=cfg).run(bx, by, bz, ne, ne)
+    # Con dl=pixel_size en pc la RM acumulada sería idéntica: Q/U no deben depender de pixel_size vía RM.
+    cfg2 = ObservationConfig(pixel_size=20000.0, dl=20000.0, frequency=1.4e9, wavelength=0.214, p_index=3.0)
+    r2 = ObservationPipeline(config=cfg2).run(bx, by, bz, ne, ne)
+    # Q/U escalan linealmente con pixel_size (dl de emisión) y nada más.
+    np.testing.assert_allclose(r1.q_map * 1000.0, r2.q_map, rtol=1e-6)
+    np.testing.assert_allclose(r1.u_map * 1000.0, r2.u_map, rtol=1e-6)
+
+
+def test_funciones_con_xp_none_no_usan_cupy_para_arreglos_numpy(monkeypatch):
+    """Con cupy instalado (p.ej. Colab), pasar arreglos numpy con xp=None debe usar numpy."""
+    import numpy as np
+    import types
+    from faradaymr import backend
+    from faradaymr.simulation.geometry import sky_footprint_mask, cylindrical_radius
+    from faradaymr.analysis.spatial_stats import transverse_rm_dispersion
+
+    import sys
+    falso_cupy = types.ModuleType("cupy")
+    falso_cupy.ndarray = type("ArregloGPUFalso", (), {})
+
+    def _no_numpy(nombre):  # cualquier función de "cupy" rechaza arreglos numpy
+        def f(*a, **k):
+            raise TypeError("'a' must be a cupy.ndarray object")
+        return f
+
+    falso_cupy.__getattr__ = _no_numpy
+    monkeypatch.setitem(sys.modules, "cupy", falso_cupy)
+    monkeypatch.setattr(backend, "_cp", falso_cupy)
+    monkeypatch.setattr(backend, "HAS_GPU", True)
+
+    ne = np.random.RandomState(0).rand(6, 6, 6)
+    assert isinstance(sky_footprint_mask(ne), np.ndarray)
+    x = np.arange(4.0)
+    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
+    assert isinstance(cylindrical_radius(xx, yy, zz, [0, 0, 1]), np.ndarray)
+    centros, valores = transverse_rm_dispersion(ne[..., 0], [1, 0, 0], 1.0, np.linspace(0, 3, 4))
+    assert isinstance(valores, np.ndarray)

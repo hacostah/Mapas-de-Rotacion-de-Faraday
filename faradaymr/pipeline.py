@@ -101,10 +101,11 @@ class ObservationPipeline:
         i_map = los.synchrotron_intensity(j_nu, cfg.pixel_size, xp=xp)
 
         psi_0 = los.polarization_angle_intrinsic(bx, by, xp=xp)
-        rm_cumulative = los.rotation_measure_cumulative(ne, bz, cfg.pixel_size, xp=xp)
-        #  para Q/U la RM acumulada de Faraday usa el mismo tamaño
-        # de celda que el resto de la caja (pixel_size), no `dl` en pc, salvo
-        # que ambos coincidan (ver ejemplo del ICM, donde sí coinciden).
+        # La RM acumulada (rotación de Faraday dentro de la fuente) lleva la
+        # misma constante 0.812 que el mapa de RM, que exige el paso en pc:
+        # hay que usar `cfg.dl`, no `cfg.pixel_size`. Con pixel_size en kpc
+        # (caso del filamento) la rotación interna salía 1000 veces menor.
+        rm_cumulative = los.rotation_measure_cumulative(ne, bz, cfg.dl, xp=xp)
         q_map, u_map = los.stokes_qu(
             j_nu,
             psi_0,

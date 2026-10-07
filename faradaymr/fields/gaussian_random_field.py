@@ -46,13 +46,12 @@ def power_law_spectrum(xp, k_mag, spectral_index, k_min, k_max):
     Amplitud espectral sigma(k) ∝ k^{-(n+2)/2}, no nula solo entre k_min y
     k_max.
 
-    n es el índice del espectro de potencia de
-    energía, P(k) ∝ k^{-n} (n=5/3 sería Kolmogorov, n=2 es lo típico para
-    turbulencia de campo magnético en el ICM). La amplitud del campo (no de
-    su energía) escala como la raíz de P(k), de ahí el exponente -(n+2)/2:
-    el +2 viene de pasar de densidad de energía por modo a densidad de
-    energía por intervalo de k en 3D (el volumen de un cascarón esférico en
-    k crece como k^2). k_min y k_max representan la escala de inyección
+    n es el índice del espectro de potencia 3D del campo magnético,
+    |B_k|^2 ∝ k^{-n} (convención de Murgia et al. 2004). En esta convención
+    Kolmogorov es n = 11/3 (su espectro de energía 1D, E(k) ∝ k^2 |B_k|^2,
+    es el conocido k^{-5/3}). Esta función devuelve la amplitud del
+    POTENCIAL vectorial A_k, ∝ k^{-(n+2)/2}: como B_k = i k × A_k agrega un
+    factor k, |B_k|^2 ∝ k^2 k^{-(n+2)} = k^{-n}. k_min y k_max representan la escala de inyección
     (remolinos más grandes, Lambda_max) y la escala de disipación (remolinos
     más chicos, Lambda_min): fuera de ese rango no hay turbulencia que
     modelar, así que la amplitud es cero.
@@ -154,7 +153,7 @@ class GaussianRandomVectorField:
         for _ in range(3):
             fase = 2.0 * xp.pi * random.random((self.n, self.n, self.n))
             amplitud = random.rayleigh(1.0, (self.n, self.n, self.n))
-            potencial_vectorial.append(sigma_k * amplitud * xp.exp(1j * fase))
+            potencial_vectorial.append(xp.asarray(sigma_k) * xp.asarray(amplitud) * xp.exp(1j * xp.asarray(fase)))
         ax_k, ay_k, az_k = potencial_vectorial
 
         bx_k = 1j * (ky * az_k - kz * ay_k)

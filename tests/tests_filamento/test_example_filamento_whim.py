@@ -9,40 +9,100 @@ from examples.filamento_whim import config as cfg
 
 def test_simetria_cilindrica_escenario():
     """
-    Verifica que la densidad electrónica generada en el escenario
-    tenga simetría cilíndrica perfecta y respete el decaimiento radial.
+    Verifica que, DENTRO de su longitud finita, la densidad electrónica
+    del filamento tenga simetría cilíndrica (translación a lo largo del
+    eje) y respete el decaimiento radial; y que, MÁS ALLÁ de esa longitud,
+    la densidad esté fuertemente suprimida (el filamento es finito, no un
+    cilindro infinito -ver `construir_escenario` en `model.py`).
     """
     # Construimos el escenario forzando el eje Z (0, 0, 1) y usando NumPy (use_gpu=False)
     bx, by, bz, ne, ne_rel, r = construir_escenario(
-        n_spec=3.0, 
+        n_spec=3.0,
         b0_microgauss=0.01,
-        axis_direction=[0, 0, 1], # Filamento alineado en el eje Z
-        use_gpu=False 
+        axis_direction=[0, 0, 1],  # Filamento alineado en el eje Z
+        use_gpu=False,
     )
 
-    # Si el modelo es un cilindro a lo largo de Z, cualquier corte transversal (plano XY)
-    # a diferentes alturas de Z debe ser exactamente idéntico.
-    corte_z_inferior = ne[:, :, 0]
-    corte_z_medio = ne[:, :, ne.shape[2] // 2]
-    corte_z_superior = ne[:, :, -1]
+    n_base = cfg.N_BASE
+    # Misma convención de malla que `model.construir_escenario` (arange con
+    # offset entero, paso EXACTO de DX_BASE_KPC) -antes esta prueba ubicaba
+    # los índices con la fórmula vieja (`linspace(-N/2, N/2, N)`, paso real
+    # ligeramente distinto), lo que hubiera desalineado los índices respecto
+    # a la malla real una vez corregido el paso en `model.py`.
+    eje_z = (np.arange(n_base) - n_base // 2) * cfg.DX_BASE_KPC
+    media_longitud = cfg.LONGITUD_FILAMENTO_KPC / 2.0
 
-    # Validamos matemáticamente que las capas son iguales
+    # Dos posiciones bien DENTRO del tramo finito del filamento (a 0% y 40%
+    # de la media longitud): ahí sigue habiendo simetría de traslación.
+    idx_centro = int(np.argmin(np.abs(eje_z - 0.0)))
+    idx_dentro = int(np.argmin(np.abs(eje_z - 0.4 * media_longitud)))
+
+    corte_centro = ne[:, :, idx_centro]
+    corte_dentro = ne[:, :, idx_dentro]
+
     np.testing.assert_allclose(
-        corte_z_inferior, corte_z_superior, 
-        err_msg="Error: El perfil de densidad varía a lo largo del eje Z (no es un cilindro infinito)."
-    )
-    np.testing.assert_allclose(
-        corte_z_inferior, corte_z_medio, 
-        err_msg="Error: El centro del cilindro difiere de los extremos."
+        corte_centro,
+        corte_dentro,
+        rtol=1e-5,
+        err_msg=(
+            "Error: el perfil transversal varía entre dos puntos que deberían "
+            "estar ambos dentro del tramo finito del filamento."
+        ),
     )
 
-    # 3. Comprobamos la física del BetaModel: la densidad debe ser máxima en el centro 
-    # transversal (radio=0) y decrecer hacia los bordes[cite: 3].
+    # Simetría z -> -z: el corte en +0.4*media_longitud debe ser igual al de
+    # -0.4*media_longitud (la máscara axial depende solo de |proyección|).
+    idx_dentro_neg = int(np.argmin(np.abs(eje_z + 0.4 * media_longitud)))
+    np.testing.assert_allclose(
+        corte_dentro,
+        ne[:, :, idx_dentro_neg],
+        rtol=1e-5,
+        err_msg="Error: la máscara axial no es simétrica respecto al centro del filamento.",
+    )
+
+    # Solo tiene sentido pedir supresión en los bordes de la caja si la caja
+    # es más profunda que la longitud del filamento (si no, todo el eje
+    # z está dentro del filamento y no hay "afuera" que comprobar aquí).
+    if n_base * cfg.DX_BASE_KPC > cfg.LONGITUD_FILAMENTO_KPC:
+        corte_borde = ne[:, :, 0]  # extremo de la caja, bien más allá de la media longitud
+        assert corte_borde.max() < 1e-3 * corte_dentro.max(), (
+            "Error: la densidad no está suprimida más allá de la longitud finita "
+            "del filamento (¿se está simulando un cilindro infinito?)."
+        )
+
+    # Comprobamos la física del BetaModel: la densidad debe ser máxima en el centro
+    # transversal (radio=0) y decrecer hacia los bordes, dentro del tramo finito.
     centro_idx = ne.shape[0] // 2
-    densidad_centro = ne[centro_idx, centro_idx, 0]
-    densidad_borde = ne[0, 0, 0]
-    
-    assert densidad_centro > densidad_borde, "Error: La densidad no decae radialmente desde el núcleo."
+    densidad_centro = ne[centro_idx, centro_idx, idx_centro]
+    densidad_borde_transversal = ne[0, 0, idx_centro]
+
+    assert densidad_centro > densidad_borde_transversal, "Error: La densidad no decae radialmente desde el núcleo."
+
+def test_construir_escenario_reutiliza_campo_b_dado():
+    # `campo_b` debe usarse tal cual, sin regenerar el campo turbulento
+    # (optimización del barrido en theta: el campo no depende de
+    # axis_direction, así que se genera una sola vez por semilla y se
+    # reutiliza en cada ángulo).
+    rng = np.random.RandomState(0)
+    bx0, by0, bz0, _, _, _ = construir_escenario(
+        n_spec=3.0, b0_microgauss=0.05, axis_direction=[0, 0, 1],
+        use_gpu=False, rng=rng,
+    )
+    campo_b = (bx0, by0, bz0)
+
+    bx1, by1, bz1, ne1, _, _ = construir_escenario(
+        n_spec=3.0, b0_microgauss=0.05, axis_direction=[1, 0, 0],
+        use_gpu=False, campo_b=campo_b,
+    )
+
+    # Mismo campo exacto, aunque axis_direction cambió (afecta solo a ne).
+    np.testing.assert_array_equal(bx1, bx0)
+    np.testing.assert_array_equal(by1, by0)
+    np.testing.assert_array_equal(bz1, bz0)
+    # La forma de ne debe coincidir con la del campo dado, no con cfg.N_BASE
+    # a ciegas (ver la nota sobre reload en model.py).
+    assert ne1.shape == bx0.shape
+
 
 def test_pipeline_filamento_corre_de_punta_a_punta_y_ajusta_gaussiana():
     from faradaymr import ObservationConfig, ObservationPipeline
@@ -63,10 +123,21 @@ def test_pipeline_filamento_corre_de_punta_a_punta_y_ajusta_gaussiana():
     lambda_m = config_fisica.LAMBDA_ONDA.to_value(u.m)
     p_spec = config_fisica.P_SPEC
     
-    # Usamos mock para reducir la malla de forma segura sin sobreescribir configuraciones globales
+    # Usamos mock para reducir la malla de forma segura sin sobreescribir configuraciones globales.
+    # También reducimos r_c en la misma proporción que la malla: con el
+    # r_c=300 kpc real y una caja de solo 32*20=640 kpc de lado, la densidad
+    # apenas cae hacia el borde de la caja (factor ~1.8), y con una sola
+    # realización de un campo turbulento cuya escala más grande (LAMBDA_MAX
+    # =500 kpc) es comparable al tamaño de la caja, el ruido de muestreo
+    # domina sobre esa señal física débil -el test resultaba frágil (pasaba
+    # o no según el seed y la métrica de distancia exacta, no según si la
+    # física estaba bien). Con r_c=40 kpc la densidad cae con fuerza dentro
+    # de la caja de prueba y la tendencia física es robusta a esto.
     with mock.patch('examples.filamento_whim.config_fisica.N_BASE', n_base_test), \
-         mock.patch('examples.filamento_whim.config.N_BASE', n_base_test):
-         
+         mock.patch('examples.filamento_whim.config.N_BASE', n_base_test), \
+         mock.patch('examples.filamento_whim.config_fisica.RC', 40.0 * u.kpc), \
+         mock.patch('examples.filamento_whim.config.RC_KPC', 40.0):
+
         axis_direction = [0.0, 0.0, 1.0]
         # Fijamos la semilla para que el comportamiento del ruido sea determinista en el test
         rng = np.random.RandomState(42) 

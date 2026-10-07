@@ -20,3 +20,7 @@ LAMBDA_MAX_KPC = cfg_units.LAMBDA_MAX.to(u.kpc).value
 NU_HZ = cfg_units.NU.to(u.Hz).value
 LAMBDA_ONDA_M = cfg_units.LAMBDA_ONDA.to(u.m).value
 DX_BASE_PC = cfg_units.DX_BASE.to(u.pc).value
+DIST_MAX_AJUSTE_KPC = cfg_units.DIST_MAX_AJUSTE.to(u.kpc).value
+N_BORDES_PERFIL = cfg_units.N_BORDES_PERFIL
+THETAS_BARRIDO = cfg_units.THETAS_BARRIDO
+N_SEMILLAS = cfg_units.N_SEMILLAS

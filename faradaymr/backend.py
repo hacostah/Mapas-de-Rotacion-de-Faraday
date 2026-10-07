@@ -38,3 +38,18 @@ def to_numpy(array):
     if HAS_GPU and isinstance(array, _cp.ndarray):
         return _cp.asnumpy(array)
     return _np.asarray(array)
+
+
+def backend_de(*arrays):
+    """
+    Módulo de arreglos (cupy o numpy) que corresponde a los arreglos dados:
+    cupy si alguno ya vive en GPU, numpy en cualquier otro caso.
+
+    Se usa como valor por defecto cuando una función recibe `xp=None`. Antes
+    varias funciones hacían `try: import cupy` y usaban cupy siempre que
+    estuviera instalado (p.ej. en Colab), aunque se les pasara un arreglo de
+    numpy, lo que rompía con "'a' must be a cupy.ndarray object".
+    """
+    if HAS_GPU and any(isinstance(a, _cp.ndarray) for a in arrays):
+        return _cp
+    return _np

@@ -1,6 +1,12 @@
 import numpy as np
 import pytest
-from faradaymr.analysis.fitting import gaussian_model, fit_transverse_dispersion
+from faradaymr.analysis.fitting import (
+    gaussian_model,
+    fit_transverse_dispersion,
+    beta_dispersion_model,
+    fit_beta_dispersion,
+    p_random_walk_cilindro,
+)
 
 def test_fit_recupera_parametros_exactos():
     """Criterio 1: Recupera sigma0 y width con perfil sintético y ruido mínimo."""
@@ -48,3 +54,121 @@ def test_fit_error_pocos_puntos():
     
     with pytest.raises(ValueError, match="No hay suficientes bins válidos"):
         fit_transverse_dispersion(centros, sigma_rm)
+
+
+def test_p_random_walk_cilindro_beta_0_5_da_p_0_5():
+    # Valor de este proyecto (config_fisica.BETA = 0.5): p = (3*0.5-0.5)/2 = 0.5.
+    assert np.isclose(p_random_walk_cilindro(0.5), 0.5)
+
+
+def test_fit_beta_libre_recupera_parametros_con_ruido_minimo():
+    centros = np.linspace(0, 20, 25)
+    sigma0_true, rc_true, p_true = 5.0, 4.0, 0.7
+    sigma_rm = beta_dispersion_model(centros, sigma0_true, rc_true, p_true)
+    sigma_rm += np.random.normal(0, 1e-6, size=centros.size)
+
+    resultado = fit_beta_dispersion(centros, sigma_rm)
+
+    assert np.isclose(resultado.sigma0, sigma0_true, atol=1e-2)
+    assert np.isclose(resultado.r_c, rc_true, atol=1e-2)
+    assert np.isclose(resultado.p, p_true, atol=1e-2)
+    assert resultado.r_squared > 0.999
+
+
+def test_fit_beta_p_fijo_ajusta_solo_dos_parametros():
+    centros = np.linspace(0, 20, 25)
+    sigma0_true, rc_true, p_true = 5.0, 4.0, 0.5
+    sigma_rm = beta_dispersion_model(centros, sigma0_true, rc_true, p_true)
+    sigma_rm += np.random.normal(0, 1e-6, size=centros.size)
+
+    resultado = fit_beta_dispersion(centros, sigma_rm, p_fijo=p_true)
+
+    assert np.isclose(resultado.sigma0, sigma0_true, atol=1e-2)
+    assert np.isclose(resultado.r_c, rc_true, atol=1e-2)
+    assert resultado.p == p_true
+    assert resultado.p_err == 0.0
+
+
+def test_fit_beta_p_fijo_recupera_rc_donde_el_libre_degenera():
+    # Caso realista de este proyecto: pocos bins y ruido no despreciable
+    # hacen que el ajuste de 3 parámetros libres (sigma0, r_c, p) quede mal
+    # condicionado. Con p fijo al valor físico esperado, el ajuste de 2
+    # parámetros sigue recuperando r_c de forma mucho más ajustada.
+    rng = np.random.default_rng(11)
+    centros = np.linspace(0, 15, 8)
+    sigma0_true, rc_true, p_true = 0.05, 3.0, 0.5
+    sigma_rm = beta_dispersion_model(centros, sigma0_true, rc_true, p_true)
+    sigma_rm += rng.normal(0, sigma0_true * 0.05, size=centros.size)
+
+    resultado_fijo = fit_beta_dispersion(centros, sigma_rm, p_fijo=p_true)
+
+    assert np.isclose(resultado_fijo.r_c, rc_true, rtol=0.2)
+    assert resultado_fijo.r_c_err < rc_true  # error razonable, no explota
+
+
+def test_fit_beta_error_pocos_puntos_con_p_fijo():
+    centros = np.array([0.0, 1.0, 2.0])
+    sigma_rm = np.array([5.0, np.nan, np.nan])
+
+    with pytest.raises(ValueError, match="No hay suficientes bins válidos"):
+        fit_beta_dispersion(centros, sigma_rm, p_fijo=0.5)
+
+def test_p_vista_frontal_y_lateral_para_beta_dos_tercios():
+    from faradaymr.analysis.fitting import p_vista_frontal, p_vista_lateral
+    # beta = 2/3 (Tanimura et al. 2020): p = 1 de frente y 0.75 de lado.
+    assert np.isclose(p_vista_frontal(2 / 3), 1.0)
+    assert np.isclose(p_vista_lateral(2 / 3), 0.75)
+
+
+def test_fit_beta_rc_fijo_recupera_p():
+    from faradaymr.analysis.fitting import beta_dispersion_model, fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    perfil = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    res = fit_beta_dispersion(d, perfil, rc_fijo=300.0)
+    assert np.isclose(res.p, 0.8, rtol=1e-5)
+    assert np.isclose(res.sigma0, 0.03, rtol=1e-5)
+    assert res.r_c == 300.0 and res.r_c_err == 0.0
+
+
+def test_fit_beta_no_permite_fijar_p_y_rc_a_la_vez():
+    from faradaymr.analysis.fitting import fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    with pytest.raises(ValueError):
+        fit_beta_dispersion(d, np.exp(-d / 300), p_fijo=0.5, rc_fijo=300.0)
+
+
+def test_semiancho_media_altura_es_donde_el_perfil_cae_a_la_mitad():
+    from faradaymr.analysis.fitting import beta_dispersion_model, semiancho_media_altura
+    for p in [0.5, 0.75, 1.0]:
+        d12 = semiancho_media_altura(300.0, p)
+        assert np.isclose(beta_dispersion_model(d12, 1.0, 300.0, p), 0.5)
+
+
+def test_fit_ponderado_acepta_errores_por_bin():
+    from faradaymr.analysis.fitting import beta_dispersion_model, fit_beta_dispersion
+    d = np.linspace(40, 860, 11)
+    perfil = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    res = fit_beta_dispersion(d, perfil, rc_fijo=300.0, errores=0.01 * perfil)
+    assert np.isclose(res.p, 0.8, rtol=1e-5)
+    assert res.p_err > 0
+
+
+def test_chi2_reducido_solo_con_errores_y_cercano_a_uno_con_ruido_real():
+    """Sin errores por bin el chi^2 reducido no está definido (NaN). Con un
+    perfil beta más ruido gaussiano del tamaño de los errores declarados, el
+    ajuste beta da chi^2_red ~ 1 y la gaussiana (forma equivocada) uno mucho
+    mayor: es la métrica con la que se comparan ambas formas."""
+    rng = np.random.default_rng(0)
+    d = np.linspace(40, 860, 11)
+    verdadero = beta_dispersion_model(d, 0.03, 300.0, 0.8)
+    errores = 0.005 * verdadero
+    chi2_beta, chi2_gauss = [], []
+    for _ in range(200):
+        perfil = verdadero + errores * rng.standard_normal(d.size)
+        chi2_beta.append(fit_beta_dispersion(d, perfil, rc_fijo=300.0, errores=errores).chi2_red)
+        chi2_gauss.append(fit_transverse_dispersion(d, perfil, errores=errores).chi2_red)
+    assert 0.8 < np.mean(chi2_beta) < 1.2
+    assert np.mean(chi2_gauss) > 10 * np.mean(chi2_beta)
+
+    assert np.isnan(fit_beta_dispersion(d, verdadero, rc_fijo=300.0).chi2_red)
+    assert np.isnan(fit_transverse_dispersion(d, verdadero).chi2_red)
