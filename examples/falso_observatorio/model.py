@@ -27,7 +27,7 @@ def construir_mapa_rm_analitico(use_gpu=None):
     perturbacion = 50.0 * xp.exp(-r2 / 0.1)
     rm_mapa = rm_base + perturbacion
     
-    return rm_mapa.astype(xp.float32)
+    return rm_mapa.astype(xp.float64)
 
 
 def observar_stokes_qu(rm_mapa, use_gpu=None):

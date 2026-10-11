@@ -24,10 +24,10 @@ def test_configuracion_frecuencias():
     lambda_5ghz = c / (5.0 * 1e9)
     assert np.isclose(cfg.LAMBDA_CUADRADO[0], lambda_5ghz**2)
 
-def test_construir_mapa_rm_analitico():
+def test_construir_mapa_rm_analitico(use_gpu=False):
     """Verifica la dimensión y los límites físicos del mapa de RM analítico."""
     # Extraemos a CPU por si se generó en GPU
-    rm_mapa = _to_cpu(construir_mapa_rm_analitico())
+    rm_mapa = _to_cpu(construir_mapa_rm_analitico(use_gpu=False))
     
     # 1. Dimensión esperada de la malla
     assert rm_mapa.shape == (cfg.N_PIXELES, cfg.N_PIXELES)
@@ -41,8 +41,8 @@ def test_construir_mapa_rm_analitico():
 
 def test_observar_stokes_qu():
     """Verifica las propiedades fundamentales de las observaciones simuladas."""
-    rm_mapa = construir_mapa_rm_analitico()
-    mapas_Q, mapas_U, mapas_psi_obs = observar_stokes_qu(rm_mapa)
+    rm_mapa = construir_mapa_rm_analitico(use_gpu=False)
+    mapas_Q, mapas_U, mapas_psi_obs = observar_stokes_qu(rm_mapa, use_gpu=False)
     
     # Extraemos explícitamente los resultados a la RAM (CPU) para validarlos con NumPy
     mapas_Q = _to_cpu(mapas_Q)

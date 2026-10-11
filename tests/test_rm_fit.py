@@ -1,7 +1,11 @@
 import numpy as np
 
 from faradaymr.analysis import estimate_rm_lsq
-from faradaymr.analysis.rm_fit import unwrap_polarization_angle, resolve_n_pi_ambiguity
+from faradaymr.analysis.rm_fit import (
+    unwrap_polarization_angle,
+    resolve_n_pi_ambiguity,
+    resolve_n_pi_ambiguity_batch,
+)
 
 
 def test_recupera_rm_sin_ruido():
@@ -83,3 +87,16 @@ def test_resolve_n_pi_ambiguity():
     
     # 5. Verificación: El RM calculado debe ser igual al RM verdadero que inyectamos
     np.testing.assert_allclose(rm_recuperado, rm_verdadero, rtol=1e-3)
+
+def test_resolve_n_pi_ambiguity_batch():
+    frecuencias_ghz = np.array([5.0, 2.0, 1.4])
+    c = 299792458.0
+    wavelengths_m = c / (frecuencias_ghz * 1e9)
+    rm_true = np.array([150.0, 293.5, 800.0])
+    psi0 = 0.5
+    lambda2 = wavelengths_m**2
+    psi = psi0 + rm_true[None, :] * lambda2[:, None]
+    psi = (psi + np.pi / 2) % np.pi - np.pi / 2
+
+    rm = resolve_n_pi_ambiguity_batch(wavelengths_m, psi, -500.0, 1500.0)
+    np.testing.assert_allclose(rm, rm_true, atol=1e-10)

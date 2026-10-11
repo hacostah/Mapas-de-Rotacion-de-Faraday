@@ -17,3 +17,13 @@ FRECUENCIAS_GHZ = np.array([5.0, 2.0, 1.4])
 VELOCIDAD_LUZ = 299792458.0
 LONGITUDES_ONDA_M = VELOCIDAD_LUZ / (FRECUENCIAS_GHZ * 1e9)
 LAMBDA_CUADRADO = LONGITUDES_ONDA_M**2
+# Ventana física usada por el estudio estadístico. La ventana forma parte
+# del experimento porque determina qué ramas n-pi se consideran posibles.
+RM_ESTUDIO_MIN = -1500.0
+RM_ESTUDIO_MAX = 1500.0
+
+# Distribución sintética de prueba, distinta de la ventana permitida al solver.
+RM_VERDAD_MIN = -1000.0
+RM_VERDAD_MAX = 1000.0
+UMBRAL_ERROR_RM = 35.0  # rad/m²; definición operacional, no universal
+SEMILLA = 42
